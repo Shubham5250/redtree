@@ -41,7 +41,7 @@
   "annotate": "Annoter",
   "rename": "Renommer",
   "duplicate": "Dupliquer",
-  "new": "Nouveau",
+  "newLabel": "Nouveau",
   "moveTo": "Déplacer vers",
   "share": "Partager",
   "suppress": "Supprimer",

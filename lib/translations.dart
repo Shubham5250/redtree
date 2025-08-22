@@ -21,8 +21,8 @@ class AppTranslations extends Translations {
       "language": "Language",
       "english": "English",
       "date": "Date",
-  "modify": "Modify",
-  "time": "Time",
+      "modify": "Modify",
+      "time": "Time",
       "format24h": "24h",
       "formatAMPM": "am/pm",
       "format_yyyy_mm_dd": "yyyy/mm/dd",
@@ -57,7 +57,7 @@ class AppTranslations extends Translations {
       "enterFolderName": "Enter folder name",
       "move": "Move",
       "fileManager": "File Manager",
-      "searchByNameOrNote": "Search by name or note...",
+      "searchByNameOrNote": "Search in ",
       "note": "Note",
       "noNoteFound": "No note found",
       "edit": "Edit",
@@ -126,7 +126,7 @@ class AppTranslations extends Translations {
       "searchPlaceholder": "Search...",
       "noteDeleteSuccess": "Note deleted successfully!",
       "searchNoteHint": "Search by name or note...",
-
+      "list": "List",
       "confirmMove": "Confirm Move",
       "itemsMovedSuccess": "Items moved successfully",
       "moveCancelled": "Move cancelled",
@@ -137,8 +137,8 @@ class AppTranslations extends Translations {
       "folderNotFound": "Folder not found",
       "tapToConfirmOrSelectAnother": "Tap OK to confirm or select another folder",
       "moveCompleted": "Move completed",
-
       "crop": "Crop",
+      "rotate": "Rotate",
     },
     'fr': {
       "searchHint": "Rechercher",
@@ -158,6 +158,7 @@ class AppTranslations extends Translations {
       "language": "Langue",
       "english": "Anglais",
       "date": "Date",
+      "rotate": "Tourner",
       "open": "Ouvrir",
       "time": "Heure",
       "define": "Définir",
@@ -195,7 +196,7 @@ class AppTranslations extends Translations {
       "move": "Déplacer",
       "fileManager": "Gestionnaire de fichiers",
   "modify": "Modifier",
-  "searchByNameOrNote": "Rechercher par nom ou note...",
+  "searchByNameOrNote": "Rechercher dans ",
       "note": "Note",
       "noNoteFound": "Aucune note trouvée",
       "edit": "Modifier",
@@ -263,8 +264,7 @@ class AppTranslations extends Translations {
       "searchPlaceholder": "Buscar...",
       "noteDeleteSuccess": "¡Nota eliminada con éxito!",
       "searchNoteHint": "Buscar por nombre o nota...",
-
-
+      "list": "Liste",
       "confirmMove": "Confirmer le déplacement",
       "itemsMovedSuccess": "Éléments déplacés avec succès",
       "moveCancelled": "Déplacement annulé",
@@ -334,7 +334,7 @@ class AppTranslations extends Translations {
       "enterFolderName": "Ordnername eingeben",
       "move": "Verschieben",
       "fileManager": "Dateimanager",
-      "searchByNameOrNote": "Nach Name oder Notiz suchen...",
+      "searchByNameOrNote": "Suchen in ",
       "note": "Notiz",
       "noNoteFound": "Keine Notiz gefunden",
       "edit": "Bearbeiten",
@@ -402,7 +402,7 @@ class AppTranslations extends Translations {
       "searchPlaceholder": "Suchen...",
       "noteDeleteSuccess": "Notiz erfolgreich gelöscht!",
       "searchNoteHint": "Nach Name oder Notiz suchen...",
-
+      "rotate": "Drehen",
       "confirmMove": "Verschieben bestätigen",
       "itemsMovedSuccess": "Elemente erfolgreich verschoben",
       "moveCancelled": "Verschieben abgebrochen",
@@ -413,8 +413,7 @@ class AppTranslations extends Translations {
       "folderNotFound": "Ordner nicht gefunden",
       "tapToConfirmOrSelectAnother": "Tippen Sie auf OK zur Bestätigung oder wählen Sie einen anderen Ordner",
       "moveCompleted": "Verschieben abgeschlossen",
-
-
+      "list": "Liste",
       "crop": "Ernte",
 
     },
@@ -473,7 +472,7 @@ class AppTranslations extends Translations {
       "enterFolderName": "Ingrese el nombre de la carpeta",
       "move": "Mover",
       "fileManager": "Administrador de archivos",
-      "searchByNameOrNote": "Buscar por nombre o nota...",
+      "searchByNameOrNote": "Buscar en ",
       "note": "Nota",
       "noNoteFound": "No se encontró ninguna nota",
       "edit": "Editar",
@@ -554,6 +553,8 @@ class AppTranslations extends Translations {
       "tapToConfirmOrSelectAnother": "Toca OK para confirmar o selecciona otra carpeta",
       "moveCompleted": "Movimiento completado",
       "crop": "Cultivo",
+      "list": "Lista",
+      "rotate": "Girar",
 
     },
     'hi': {
@@ -609,7 +610,7 @@ class AppTranslations extends Translations {
       "enterFolderName": "फ़ोल्डर नाम दर्ज करें",
       "move": "स्थानांतरित करें",
       "fileManager": "फ़ाइल प्रबंधक",
-      "searchByNameOrNote": "नाम या नोट से खोजें...",
+      "searchByNameOrNote": "खोजें ",
       "note": "नोट",
       "noNoteFound": "कोई नोट नहीं मिला",
       "edit": "संपादित करें",
@@ -691,7 +692,8 @@ class AppTranslations extends Translations {
       "tapToConfirmOrSelectAnother": "पुष्टि के लिए OK दबाएँ या कोई अन्य फ़ोल्डर चुनें",
       "moveCompleted": "स्थानांतरण पूरा हुआ",
       "crop": "काँटे",
-
+      "list": "सूची",
+      "rotate": "घुमाएँ",
     }
   };
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:fluttertoast/fluttertoast.dart';
 import 'package:get/get.dart';
 import 'package:path/path.dart' as path;
+import 'package:path/path.dart' as p;
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import 'SearchIndex.dart';
@@ -10,6 +11,130 @@ import 'globals.dart';
 
 
 class NoteUtils {
+  // static Future<void> showNoteInputModal(
+  //     BuildContext context,
+  //     String imagePath,
+  //     Function(String, String) onNoteSubmitted, {
+  //       String initialText = '',
+  //       bool isEditing = false,
+  //     })
+  // async {
+  //   final TextEditingController noteController = TextEditingController(text: initialText);
+  //   final speech = stt.SpeechToText();
+  //   bool _isListening = false;
+  //
+  //   await showModalBottomSheet(
+  //     context: context,
+  //     isScrollControlled: true,
+  //     shape: const RoundedRectangleBorder(
+  //       borderRadius: BorderRadius.zero, // no radius at all
+  //     ),
+  //     clipBehavior: Clip.antiAlias, // ensure shape is app
+  //     builder: (context) {
+  //       return Padding(
+  //         padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+  //         child: StatefulBuilder(
+  //           builder: (context, setState) {
+  //             return Padding(
+  //               padding: const EdgeInsets.all(16),
+  //               child: Column(
+  //                 mainAxisSize: MainAxisSize.min,
+  //                 children: [
+  //                   Row(
+  //                     children: [
+  //                       IconButton(
+  //                         icon: const Icon(Icons.keyboard),
+  //                         tooltip: 'keyboardInput'.tr,
+  //                         onPressed: () {},
+  //                       ),
+  //                       IconButton(
+  //                         icon: Icon(_isListening ? Icons.mic_off : Icons.mic),
+  //                         color: _isListening ? Colors.red : null,
+  //                         tooltip: 'voiceInput'.tr,
+  //                         onPressed: () async {
+  //                           if (!_isListening) {
+  //                             final available = await speech.initialize(
+  //                               onStatus: (status) => debugPrint('Speech status: $status'),
+  //                               onError: (error) => debugPrint('Speech error: $error'),
+  //                             );
+  //
+  //                             if (available) {
+  //                               setState(() => _isListening = true);
+  //                               speech.listen(
+  //                                 onResult: (result) {
+  //                                   if (result.finalResult) {
+  //                                     noteController.text = result.recognizedWords;
+  //                                   }
+  //                                 },
+  //                               );
+  //                             }
+  //                           } else {
+  //                             speech.stop();
+  //                             setState(() => _isListening = false);
+  //                           }
+  //                         },
+  //                       ),
+  //                       if (_isListening)
+  //                         Padding(
+  //                           padding: const EdgeInsets.only(left: 8),
+  //                           child: Text(
+  //                             'listening'.tr,
+  //                             style: const TextStyle(color: Colors.red),
+  //                           ),
+  //                         ),
+  //                     ],
+  //                   ),
+  //                   TextField(
+  //                     controller: noteController,
+  //                     maxLines: 5,
+  //                     autofocus: true,
+  //                     decoration: InputDecoration(
+  //                       hintText: 'typeYourNoteHere'.tr,
+  //                       border: const OutlineInputBorder(),
+  //                       suffixIcon: noteController.text.isNotEmpty
+  //                           ? IconButton(
+  //                         icon: const Icon(Icons.clear),
+  //                         onPressed: () => noteController.clear(),
+  //                       )
+  //                           : null,
+  //                     ),
+  //                   ),
+  //                   const SizedBox(height: 16),
+  //                   Row(
+  //                     mainAxisAlignment: MainAxisAlignment.end,
+  //                     children: [
+  //                       TextButton(
+  //                         onPressed: () => Navigator.pop(context),
+  //                         child: Text('cancel'.tr),
+  //                       ),
+  //                       const SizedBox(width: 8),
+  //                       ElevatedButton(
+  //                         onPressed: () {
+  //                           final note = noteController.text.trim();
+  //                           if (note.isNotEmpty) {
+  //                             onNoteSubmitted(imagePath, note);
+  //                             saveNoteToFile(imagePath, note);
+  //                             Fluttertoast.showToast(
+  //                               msg: isEditing ? 'noteUpdated'.tr : 'noteSaved'.tr,
+  //                               toastLength: Toast.LENGTH_SHORT,
+  //                             );
+  //                           }
+  //                           Navigator.pop(context);
+  //                         },
+  //                         child: Text(isEditing ? 'update'.tr : 'save'.tr),
+  //                       ),
+  //                     ],
+  //                   ),
+  //                 ],
+  //               ),
+  //             );
+  //           },
+  //         ),
+  //       );
+  //     },
+  //   );
+  // }
+
   static Future<void> showNoteInputModal(
       BuildContext context,
       String imagePath,
@@ -25,8 +150,9 @@ class NoteUtils {
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+        borderRadius: BorderRadius.zero,
       ),
+      clipBehavior: Clip.antiAlias,
       builder: (context) {
         return Padding(
           padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
@@ -54,7 +180,6 @@ class NoteUtils {
                                 onStatus: (status) => debugPrint('Speech status: $status'),
                                 onError: (error) => debugPrint('Speech error: $error'),
                               );
-
                               if (available) {
                                 setState(() => _isListening = true);
                                 speech.listen(
@@ -106,17 +231,26 @@ class NoteUtils {
                         ),
                         const SizedBox(width: 8),
                         ElevatedButton(
-                          onPressed: () {
+                          onPressed: () async {
                             final note = noteController.text.trim();
                             if (note.isNotEmpty) {
-                              onNoteSubmitted(imagePath, note);
-                              saveNoteToFile(imagePath, note);
+                              showDialog(
+                                context: context,
+                                barrierDismissible: false,
+                                builder: (context) => const Center(child: CircularProgressIndicator()),
+                              );
+                              Navigator.pop(context); // Close modal
+                              await onNoteSubmitted(imagePath, note);
+                              Navigator.pop(context); // Close modal
+
+                              await saveNoteToFile(imagePath, note);
+
                               Fluttertoast.showToast(
                                 msg: isEditing ? 'noteUpdated'.tr : 'noteSaved'.tr,
                                 toastLength: Toast.LENGTH_SHORT,
                               );
                             }
-                            Navigator.pop(context);
+
                           },
                           child: Text(isEditing ? 'update'.tr : 'save'.tr),
                         ),
@@ -132,33 +266,60 @@ class NoteUtils {
     );
   }
 
-  static void saveNoteToFile(String imagePath, String note) {
+  //
+  // static void saveNoteToFile(String imagePath, String note) {
+  //   try {
+  //     final notePath = path.withoutExtension(imagePath) + ".txt";
+  //     File(notePath).writeAsStringSync(note);
+  //     debugPrint('Note saved to: $notePath');
+  //     mediaNotesNotifier.value = {
+  //       ...mediaNotesNotifier.value,
+  //       imagePath: note,
+  //     };
+  //     IndexManager.instance.updateNoteContent(imagePath, note);
+  //
+  //   } catch (e) {
+  //     debugPrint('Error saving note: $e');
+  //   }
+  // }
+  static Future<void> saveNoteToFile(String imagePath, String note) async {
     try {
-      final notePath = path.withoutExtension(imagePath) + ".txt";
-      File(notePath).writeAsStringSync(note);
-      debugPrint('Note saved to: $notePath');
-      mediaNotesNotifier.value = {
-        ...mediaNotesNotifier.value,
-        imagePath: note,
-      };
-      IndexManager.instance.updateNoteContent(imagePath, note);
+      final start = DateTime.now();
+      final notePath = p.withoutExtension(imagePath) + ".txt";
+      await File(notePath).writeAsString(note);
+      debugPrint('File write took: ${DateTime.now().difference(start).inMilliseconds}ms');
 
+      final indexStart = DateTime.now();
+      await IndexManager.instance.updateNoteContent(imagePath, note);
+      debugPrint('Index update took: ${DateTime.now().difference(indexStart).inMilliseconds}ms');
     } catch (e) {
       debugPrint('Error saving note: $e');
     }
   }
 
-  static void addOrUpdateNote(
+  // static void addOrUpdateNote(
+  //     String imagePath,
+  //     String noteText,
+  //     ValueNotifier<Map<String, String>> mediaNotesNotifier,
+  //     ) {
+  //   mediaNotesNotifier.value = {
+  //     ...mediaNotesNotifier.value,
+  //     imagePath: noteText,
+  //   };
+  //   IndexManager.instance.updateNoteContent(imagePath, noteText);
+  //
+  // }
+
+  static Future<void> addOrUpdateNote(
       String imagePath,
       String noteText,
       ValueNotifier<Map<String, String>> mediaNotesNotifier,
-      ) {
+      ) async {
+    await IndexManager.instance.updateNoteContent(imagePath, noteText);
     mediaNotesNotifier.value = {
       ...mediaNotesNotifier.value,
       imagePath: noteText,
     };
-    IndexManager.instance.updateNoteContent(imagePath, noteText);
-
   }
 
   static Future<String?> loadNoteFromFile(String imagePath) async {
@@ -184,14 +345,13 @@ class NoteUtils {
 
     final List<FileSystemEntity> allFiles = [];
 
-    // Recursively collect all files, safely skipping unaccessible folders
     void safeCollectFiles(Directory dir) {
       try {
         for (var entity in dir.listSync(recursive: false)) {
           if (entity is File) {
             allFiles.add(entity);
           } else if (entity is Directory) {
-            safeCollectFiles(entity); // recurse safely
+            safeCollectFiles(entity);
           }
         }
       } catch (e) {
@@ -230,7 +390,30 @@ class NoteUtils {
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: Text('note'.tr),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+        ),
+        // contentPadding: EdgeInsetsGeometry.zero,
+        titlePadding: EdgeInsetsGeometry.zero,
+        title: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Text(
+                'note'.tr,
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: IconButton(
+                icon: Icon(Icons.close),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ],
+        ),
         content: Text(hasNote ? currentNote! : 'noNoteFound'.tr),
         actions: [
           TextButton(

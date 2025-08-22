@@ -21,6 +21,8 @@ class FileUtils {
         VoidCallback? onFileChanged,
         VoidCallback? onEnterMultiSelectMode,
         VoidCallback? onFilesMoved,
+        Function(String oldPath, String newPath)? onFileRenamed,
+
       }) async {
     final RenderBox overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
 
@@ -71,7 +73,8 @@ class FileUtils {
 
         final index = mediaFiles.indexWhere((f) => f.path == file.path);
         if (index != -1) {
-          Navigator.push(
+
+          final viewerResult = await Navigator.push<Map<String, dynamic>>(
             context,
             MaterialPageRoute(
               builder: (_) => FullScreenMediaViewer(
@@ -81,10 +84,37 @@ class FileUtils {
               ),
             ),
           );
+
+          if (viewerResult != null) {
+            final hasChanges = viewerResult['hasChanges'] as bool? ?? false;
+            final renamedFiles = viewerResult['renamedFiles'] as Map<String, String>? ?? {};
+            final folderContentChanged = viewerResult['folderContentChanged'] as bool? ?? false;
+
+            if (hasChanges && renamedFiles.isNotEmpty) {
+              for (final entry in renamedFiles.entries) {
+                onFileRenamed?.call(entry.key, entry.value);
+              }
+              onFileChanged?.call();
+            }
+
+            if (hasChanges && folderContentChanged) {
+              onFileChanged?.call();
+
+            }
+          }
+
+
+          await NoteUtils.loadAllNotes("/storage/emulated/0");
+
+          mediaNotesNotifier.notifyListeners();
+          if (viewerResult == true) {
+            onFileChanged?.call();
+          }
         } else {
           Fluttertoast.showToast(msg: "File not found in media list".tr);
         }
         break;
+
 
       case 'rename':
         final oldPath = file.path;
@@ -98,26 +128,25 @@ class FileUtils {
               toastLength: Toast.LENGTH_LONG,
             );
 
-            final success = await Navigator.push<bool>(
+            Navigator.pushReplacement(
               context,
               MaterialPageRoute(
                 builder: (context) => FileManager(
                   selectedPaths: [file.path],
                   enableFolderSelection: true,
+                  onFilesMoved: () {
+                      onFileChanged?.call();
+                      onFilesMoved?.call();
+                  }
                 ),
               ),
             );
-
-            if (success == true) {
-              onFileChanged?.call();
-              onFilesMoved?.call();
-            }
           },
         );
         if (renamed != null) {
-          final newPath = file.path;
+
         IndexManager.instance.updateForRename(
-          file.path,
+          oldPath,
           renamed.path,
           renamed is Directory,
         );
@@ -142,23 +171,24 @@ class FileUtils {
           toastLength: Toast.LENGTH_LONG,
         );
 
-        final success = await Navigator.push<bool>(
+      Navigator.pushAndRemoveUntil(
           context,
           MaterialPageRoute(
             builder: (context) => FileManager(
               selectedPaths: [file.path],
               enableFolderSelection: true,
-              onFilesMoved: onFilesMoved,
+              onFilesMoved:() {
+
+            onFileChanged?.call();
+            onFilesMoved?.call();
+
+            }
             ),
-          ),
-        );
+          ),  (route) => route.isFirst,
 
-        if (success == true) {
+      );
 
-          onFileChanged?.call();
-          onFilesMoved?.call();
 
-        }
         break;
       case 'share':
         await shareFile(context, file);
@@ -175,31 +205,16 @@ class FileUtils {
   }
 
 
-  // static Future<File?> deleteFile(BuildContext context, File file) async {
-  //   try {
-  //     await file.delete();
-  //     mediaReloadNotifier.value++;
-  //     Fluttertoast.showToast(msg: "fileDeleted".tr);
-  //     return file; // ✅ return deleted file
-  //   } catch (_) {
-  //     Fluttertoast.showToast(msg: "fileDeleteFailed".tr);
-  //     return null;
-  //   }
-  // }
-  //
+
 
   static Future<File?> deleteFile(BuildContext context, File file) async {
     try {
-      // Delete file
       await file.delete();
 
-      // Delete associated .txt note file
       final noteFile = File('${file.path}.txt');
       if (await noteFile.exists()) {
         await noteFile.delete();
       }
-
-      // Notify UI
       mediaNotesNotifier.value.remove(file.path);
       mediaReloadNotifier.value++;
 
@@ -224,7 +239,32 @@ class FileUtils {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: Text("rename".tr),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+        ),
+
+
+        // contentPadding: EdgeInsetsGeometry.zero,
+        titlePadding: EdgeInsetsGeometry.zero,
+        title: Stack(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Text(
+                "rename".tr,
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            Positioned(
+              top: 4,
+              right: 4,
+              child: IconButton(
+                icon: Icon(Icons.close),
+                onPressed: () => Navigator.of(context).pop(),
+              ),
+            ),
+          ],
+        ),
         content: TextField(controller: controller),
         actions: [
           TextButton(
@@ -333,7 +373,30 @@ class FileUtils {
         final shouldOverwrite = await showDialog<bool>(
           context: context,
           builder: (_) => AlertDialog(
-            title: Text('fileExists'.tr),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.zero,
+            ),
+            titlePadding: EdgeInsetsGeometry.zero,
+
+            title: Stack(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Text(
+                    'fileExists'.tr,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                ),
+                Positioned(
+                  top: 4,
+                  right: 4,
+                  child: IconButton(
+                    icon: Icon(Icons.close),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ),
+              ],
+            ),
             content: Text('overwriteConfirmation'.tr),
             actions: [
               TextButton(
@@ -370,20 +433,6 @@ class FileUtils {
         }
       }
 
-      // final notePath = '${file.path}.txt';
-      // if (await File(notePath).exists()) {
-      //   try {
-      //     final newNotePath = '$newPath.txt';
-      //     await File(notePath).rename(newNotePath);
-      //     mediaNotesNotifier.value = {
-      //       ...mediaNotesNotifier.value,
-      //       newPath: mediaNotesNotifier.value[file.path] ?? '',
-      //     };
-      //     mediaNotesNotifier.value.remove(file.path);
-      //   } catch (noteError) {
-      //     debugPrint('Note move failed: $noteError');
-      //   }
-      // }
       final notePath = p.withoutExtension(file.path) + '.txt';
       if (await File(notePath).exists()) {
         try {
@@ -392,14 +441,12 @@ class FileUtils {
 
           final noteContent = mediaNotesNotifier.value[file.path] ?? '';
 
-          // Update local note map
           mediaNotesNotifier.value = {
             ...mediaNotesNotifier.value,
             newPath: noteContent,
           };
           mediaNotesNotifier.value.remove(file.path);
 
-          // Update index as well
           IndexManager.instance.updateNoteContent(newPath, noteContent);
         } catch (noteError) {
           debugPrint('Note move failed: $noteError');
@@ -439,11 +486,10 @@ class FileUtils {
     }
   }
 
-
-  static void openFullScreen(BuildContext context, File file, List<File> mediaFiles) {
+  static Future<void> openFullScreen(BuildContext context, File file, List<File> mediaFiles) async {
     final initialIndex = mediaFiles.indexOf(file);
 
-    Navigator.push(
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (_) => FullScreenMediaViewer(
@@ -452,7 +498,11 @@ class FileUtils {
         ),
       ),
     );
+
+    await NoteUtils.loadAllNotes("/storage/emulated/0");
+    mediaNotesNotifier.notifyListeners();
   }
+
 
 
   static Future<bool> isFolderAccessible(String folderPath) async {

@@ -17,9 +17,58 @@ class ImageCropScreen extends StatefulWidget {
 class _ImageCropScreenState extends State<ImageCropScreen> {
   final GlobalKey<ExtendedImageEditorState> editorKey = GlobalKey();
 
+  // Future<void> _cropAndSave() async {
+  //   final state = editorKey.currentState;
+  //   if (state == null) return;
+  //
+  //   final cropRect = state.getCropRect();
+  //   final action = state.editAction;
+  //
+  //   if (cropRect == null || cropRect.width == 0 || cropRect.height == 0) {
+  //     Fluttertoast.showToast(msg: "Invalid crop area");
+  //     return;
+  //   }
+  //
+  //   final Uint8List rawBytes = await widget.imageFile.readAsBytes();
+  //   img.Image? image = img.decodeImage(rawBytes);
+  //   if (image == null) {
+  //     Fluttertoast.showToast(msg: "Failed to decode image");
+  //     return;
+  //   }
+  //
+  //
+  //   if (action?.flipY == true) image = img.flipVertical(image);
+  //
+  //   final int left = cropRect.left.round().clamp(0, image.width - 1);
+  //   final int top = cropRect.top.round().clamp(0, image.height - 1);
+  //   final int width = cropRect.width.round().clamp(1, image.width - left);
+  //   final int height = cropRect.height.round().clamp(1, image.height - top);
+  //
+  //   try {
+  //     final cropped = img.copyCrop(
+  //       image,
+  //       x: left,
+  //       y: top,
+  //       width: width,
+  //       height: height,
+  //     );
+  //
+  //     final resultBytes = Uint8List.fromList(img.encodeJpg(cropped));
+  //
+  //     await widget.imageFile.writeAsBytes(resultBytes);
+  //
+  //     Fluttertoast.showToast(msg: "Image cropped successfully");
+  //
+  //     if (context.mounted) Navigator.pop(context, true);
+  //   } catch (e) {
+  //     Fluttertoast.showToast(msg: "Crop failed: $e");
+  //   }
+  // }
   Future<void> _cropAndSave() async {
     final state = editorKey.currentState;
     if (state == null) return;
+
+    Fluttertoast.showToast(msg: "Cropping image...");
 
     final cropRect = state.getCropRect();
     final action = state.editAction;
@@ -29,30 +78,21 @@ class _ImageCropScreenState extends State<ImageCropScreen> {
       return;
     }
 
-    final Uint8List rawBytes = await widget.imageFile.readAsBytes();
-    img.Image? image = img.decodeImage(rawBytes);
-    if (image == null) {
-      Fluttertoast.showToast(msg: "Failed to decode image");
-      return;
-    }
-
-    // Rotate if needed
-    // final int angle = action?.rotateAngle.toInt() ?? 0;
-    // if (angle != 0) {
-    //   image = img.copyRotate(image, angle);
-    // }
-
-    // Flip
-    // if (action?.flipX == true) image = img.flipHorizontal(image);
-    if (action?.flipY == true) image = img.flipVertical(image);
-
-    // Clamp crop region
-    final int left = cropRect.left.round().clamp(0, image.width - 1);
-    final int top = cropRect.top.round().clamp(0, image.height - 1);
-    final int width = cropRect.width.round().clamp(1, image.width - left);
-    final int height = cropRect.height.round().clamp(1, image.height - top);
-
     try {
+      final rawBytes = await widget.imageFile.readAsBytes();
+      img.Image? image = img.decodeImage(rawBytes);
+      if (image == null) {
+        Fluttertoast.showToast(msg: "Failed to decode image");
+        return;
+      }
+
+      if (action?.flipY == true) image = img.flipVertical(image);
+
+      final int left = cropRect.left.round().clamp(0, image.width - 1);
+      final int top = cropRect.top.round().clamp(0, image.height - 1);
+      final int width = cropRect.width.round().clamp(1, image.width - left);
+      final int height = cropRect.height.round().clamp(1, image.height - top);
+
       final cropped = img.copyCrop(
         image,
         x: left,
@@ -61,11 +101,9 @@ class _ImageCropScreenState extends State<ImageCropScreen> {
         height: height,
       );
 
-      final resultBytes = Uint8List.fromList(img.encodeJpg(cropped));
+      await widget.imageFile.writeAsBytes(img.encodeJpg(cropped));
 
-      await widget.imageFile.writeAsBytes(resultBytes);
-
-      Fluttertoast.showToast(msg: "Image cropped successfully");
+      // Fluttertoast.showToast(msg: "Crop complete!");
 
       if (context.mounted) Navigator.pop(context, true);
     } catch (e) {
@@ -91,22 +129,14 @@ class _ImageCropScreenState extends State<ImageCropScreen> {
           fit: BoxFit.contain,
           mode: ExtendedImageMode.editor,
           extendedImageEditorKey: editorKey,
-          // initEditorConfigHandler: (state) {
-          //   return EditorConfig(
-          //     maxScale: 8.0,
-          //     cropAspectRatio: 1.0,
-          //     hitTestSize: 20.0,
-          //     cropRectPadding: const EdgeInsets.all(20.0),
-          //     cropLayerPainter: const EditorCropLayerPainter(),
-          //   );
-          // },
+
             initEditorConfigHandler: (state) {
               return EditorConfig(
                 maxScale: 8.0,
-                cropAspectRatio: null, // null means freeform
+                cropAspectRatio: null,
                 hitTestSize: 20.0,
                 cropRectPadding: EdgeInsets.zero,
-                initCropRectType: InitCropRectType.imageRect, // ✅ use full image
+                initCropRectType: InitCropRectType.imageRect,
                 cropLayerPainter: const EditorCropLayerPainter(),
               );
             }

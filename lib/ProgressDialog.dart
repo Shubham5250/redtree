@@ -20,6 +20,31 @@ class ProgressDialog {
           builder: (context, setState) {
             _setState = setState;
             return AlertDialog(
+
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.zero,
+              ),
+              titlePadding: EdgeInsetsGeometry.zero,
+
+              title: Stack(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Text(
+                      'Dialog Title',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: IconButton(
+                      icon: Icon(Icons.close),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ),
+                ],
+              ),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [

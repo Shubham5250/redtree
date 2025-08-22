@@ -56,7 +56,7 @@ class CustomTitleRow extends StatelessWidget {
               Container(
                 width: 1,
                 height: 24,
-                color: Colors.grey[400],
+                color: Colors.grey[700],
               ),
 
               // const Spacer(flex: 5),
