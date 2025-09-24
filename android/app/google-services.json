@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "575468426412",
+    "project_id": "redtree-17d2e",
+    "storage_bucket": "redtree-17d2e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:575468426412:android:b0ef716ae17f5f0e257b09",
+        "android_client_info": {
+          "package_name": "com.example.redtree"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "575468426412-hka1g69a8stq9u64dr0v64cbih0l71cq.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.redtree",
+            "certificate_hash": "50e212366df2fa827b1641708ae4ae9553141748"
+          }
+        },
+        {
+          "client_id": "575468426412-0sbfhd8b6afadm472sae907n4ords6hu.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDxFP6jW8K6hS64VhgVKmjF5vyV_H767Fw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "575468426412-0sbfhd8b6afadm472sae907n4ords6hu.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

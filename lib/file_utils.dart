@@ -5,10 +5,15 @@ import 'package:fluttertoast/fluttertoast.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'FileManager.dart';
 import 'SearchIndex.dart';
 import 'note_utils.dart';
 import 'package:get/get.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'BlinkingMicWidget.dart';
+import 'TextEditorScreen.dart';
 
 import 'globals.dart';
 
@@ -33,14 +38,16 @@ class FileUtils {
         overlay.size.height - 60,
       ),
       items: [
-        PopupMenuItem(value: 'annotate', height: 36, child: Text('annotate'.tr)),
-        PopupMenuItem(value: 'open', height: 36, child: Text('open'.tr)),
-        PopupMenuItem(value: 'rename', height: 36, child: Text('rename'.tr)),
-        PopupMenuItem(value: 'duplicate', height: 36, child: Text('duplicate'.tr)),
-        PopupMenuItem(value: 'select', height: 36, child: Text('select'.tr)),
-        PopupMenuItem(value: 'move', height: 36, child: Text('moveTo'.tr)),
-        PopupMenuItem(value: 'share', height: 36, child: Text('share'.tr)),
-        PopupMenuItem(value: 'suppress', height: 36, child: Text('suppress'.tr)),
+        PopupMenuItem(value: 'annotate', height: 28, child: Text('annotate'.tr)),
+        PopupMenuItem(value: 'open', height: 28, child: Text('open'.tr)),
+        if (file.path.toLowerCase().endsWith('.txt'))
+          PopupMenuItem(value: 'edit', height: 28, child: Text('edit'.tr)),
+        PopupMenuItem(value: 'rename', height: 28, child: Text('rename'.tr)),
+        PopupMenuItem(value: 'duplicate', height: 28, child: Text('duplicate'.tr)),
+        PopupMenuItem(value: 'select', height: 28, child: Text('select'.tr)),
+        PopupMenuItem(value: 'move', height: 28, child: Text('moveTo'.tr)),
+        PopupMenuItem(value: 'share', height: 28, child: Text('share'.tr)),
+        PopupMenuItem(value: 'suppress', height: 28, child: Text('suppress'.tr)),
       ],
     );
 
@@ -55,20 +62,42 @@ class FileUtils {
         );
         break;
 
+      case 'edit':
+        if (file.path.toLowerCase().endsWith('.txt')) {
+          try {
+            final content = await file.readAsString();
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => TextEditorScreen(
+                  textFile: file,
+                  initialContent: content,
+                ),
+              ),
+            );
+            onFileChanged?.call();
+          } catch (e) {
+            Fluttertoast.showToast(msg: "failedToReadFile".tr);
+          }
+        }
+        break;
+
       case 'open':
         final parentDir = file.parent;
         final mediaFiles = parentDir
             .listSync()
             .whereType<File>()
-            .where((f) =>
-        !p.basename(f.path).startsWith('.') &&
-            (f.path.endsWith('.jpg') ||
-                f.path.endsWith('.jpeg') ||
-                f.path.endsWith('.png') ||
-                f.path.endsWith('.mp4') ||
-                f.path.endsWith('.mov') ||
-                f.path.endsWith('.webm') ||
-                f.path.endsWith('.avi')))
+            .where((f) {
+              final name = p.basename(f.path);
+              if (name.startsWith('.')) return false;
+              final lower = f.path.toLowerCase();
+              // Include supported media + audio + standalone txt files
+              final isMedia = lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') ||
+                  lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm') || lower.endsWith('.avi');
+              final isAudio = lower.endsWith('.mp3') || lower.endsWith('.m4a');
+              final isStandaloneTxt = lower.endsWith('.txt') && !_isSidecarNoteForAnyMedia(f.path);
+              return isMedia || isAudio || isStandaloneTxt;
+            })
             .toList();
 
         final index = mediaFiles.indexWhere((f) => f.path == file.path);
@@ -104,11 +133,17 @@ class FileUtils {
           }
 
 
-          await NoteUtils.loadAllNotes("/storage/emulated/0");
-
-          mediaNotesNotifier.notifyListeners();
+          // Defer note loading and UI updates to avoid blocking navigation
+          Future.delayed(Duration(milliseconds: 1000), () async {
+            await NoteUtils.loadAllNotes("/storage/emulated/0");
+            mediaNotesNotifier.notifyListeners();
+          });
+          
           if (viewerResult == true) {
-            onFileChanged?.call();
+            // Defer file change callback to avoid blocking navigation
+            Future.delayed(Duration(milliseconds: 500), () {
+              onFileChanged?.call();
+            });
           }
         } else {
           Fluttertoast.showToast(msg: "File not found in media list".tr);
@@ -211,7 +246,8 @@ class FileUtils {
     try {
       await file.delete();
 
-      final noteFile = File('${file.path}.txt');
+      // Delete corresponding sidecar note: baseName + .txt
+      final noteFile = File(p.withoutExtension(file.path) + '.txt');
       if (await noteFile.exists()) {
         await noteFile.delete();
       }
@@ -226,6 +262,19 @@ class FileUtils {
     }
   }
 
+  // Helper: detect if a .txt is a sidecar note for any media sibling
+  static bool _isSidecarNoteForAnyMedia(String txtPath) {
+    if (!txtPath.toLowerCase().endsWith('.txt')) return false;
+    final base = p.withoutExtension(txtPath);
+    const mediaExts = ['.jpg', '.jpeg', '.png', '.mp4', '.mov', '.webm', '.avi', '.mp3', '.m4a'];
+    for (final ext in mediaExts) {
+      if (File(base + ext).existsSync() || File(base + ext.toUpperCase()).existsSync()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
 
   static Future<File?> showRenameDialog(
       BuildContext context,
@@ -235,70 +284,112 @@ class FileUtils {
     final controller = TextEditingController(text: p.basenameWithoutExtension(file.path));
     bool moveRequested = false;
     File? renamedFile;
+    final speech = stt.SpeechToText();
+    bool _isListening = false;
 
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.zero,
-        ),
-
-
-        // contentPadding: EdgeInsetsGeometry.zero,
-        titlePadding: EdgeInsetsGeometry.zero,
-        title: Stack(
-          children: [
-            Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: Text(
-                "rename".tr,
-                style: Theme.of(context).textTheme.titleLarge,
+      builder: (_) {
+        // Select all text when dialog opens
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          controller.selection = TextSelection(
+            baseOffset: 0,
+            extentOffset: controller.text.length,
+          );
+        });
+        
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.zero,
               ),
-            ),
-            Positioned(
-              top: 4,
-              right: 4,
-              child: IconButton(
-                icon: Icon(Icons.close),
-                onPressed: () => Navigator.of(context).pop(),
+              titlePadding: EdgeInsetsGeometry.zero,
+              title: Stack(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(16.0),
+                    child: Text(
+                      "rename".tr,
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: IconButton(
+                      icon: Icon(Icons.close),
+                      onPressed: () => Navigator.of(context).pop(),
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
-        content: TextField(controller: controller),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(_, false),
-            child: Text("cancel".tr),
-          ),
-          TextButton(
-            onPressed: () {
-              moveRequested = true;
-              Navigator.pop(_, true);
-            },
-            child: Text("move".tr),
-          ),
-          TextButton(
-            onPressed: () async {
-              final newPath = p.join(
-                p.dirname(file.path),
-                controller.text + p.extension(file.path),
-              );
-              try {
-                final renamed = await file.rename(newPath);
-                mediaReloadNotifier.value++;
-                Fluttertoast.showToast(msg: "renameSuccess".tr);
-                renamedFile = renamed;
-                Navigator.pop(_, true);
-              } catch (_) {
-                Fluttertoast.showToast(msg: "renameFailed".tr);
-                Navigator.pop(context, false);
-              }
-            },
-            child: Text("rename".tr),
-          ),
-        ],
-      ),
+              content: TextField(
+                controller: controller,
+                decoration: InputDecoration(
+                  hintText: 'Enter file name',
+                  suffixIcon: BlinkingMicSuffixIcon(
+                    isListening: _isListening,
+                    onPressed: () async {
+                      if (!_isListening) {
+                        bool available = await speech.initialize(
+                          onStatus: (status) => print('Speech status: $status'),
+                          onError: (error) => print('Speech error: $error'),
+                        );
+
+                        if (available) {
+                          setState(() => _isListening = true);
+                          speech.listen(
+                            onResult: (result) {
+                              final spokenName = result.recognizedWords.replaceAll(' ', '_');
+                              controller.text = spokenName;
+                            },
+                          );
+                        }
+                      } else {
+                        speech.stop();
+                        setState(() => _isListening = false);
+                      }
+                    },
+                  ),
+                ),
+                onTap: () {
+                  // Clear selection and place cursor at tapped position
+                  // The default behavior will handle cursor placement
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    moveRequested = true;
+                    Navigator.pop(_, true);
+                  },
+                  child: Text("move".tr),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    final newPath = p.join(
+                      p.dirname(file.path),
+                      controller.text + p.extension(file.path),
+                    );
+                    try {
+                      final renamed = await file.rename(newPath);
+                      mediaReloadNotifier.value++;
+                      Fluttertoast.showToast(msg: "renameSuccess".tr);
+                      renamedFile = renamed;
+                      Navigator.pop(_, true);
+                    } catch (_) {
+                      Fluttertoast.showToast(msg: "renameFailed".tr);
+                      Navigator.pop(context, false);
+                    }
+                  },
+                  child: Text("ok".tr),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
 
     if (moveRequested && confirmed == true) {
@@ -399,10 +490,6 @@ class FileUtils {
             ),
             content: Text('overwriteConfirmation'.tr),
             actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(_, false),
-                child: Text('cancel'.tr),
-              ),
               TextButton(
                 onPressed: () => Navigator.pop(_, true),
                 child: Text('overwrite'.tr),
@@ -528,6 +615,168 @@ class FileUtils {
         ),
       ),
     );
+  }
+
+  /// Automatically creates the RedTree folder if it doesn't exist
+/// This function should be called during app initialization
+static Future<void> ensureRedTreeFolderExists() async {
+    try {
+      print('🔄 Initializing RedTree folder...');
+      
+      if (Platform.isAndroid) {
+        // First, try to request all necessary permissions
+        await _requestStoragePermissions();
+
+        // Try to create RedTree folder in multiple locations for compatibility
+        String? successfulPath = await _createRedTreeFolder();
+        
+        if (successfulPath != null) {
+          await _setDefaultStoragePath(successfulPath);
+          print('✅ RedTree folder initialized at: $successfulPath');
+        } else {
+          // Fallback to app documents directory
+          final appDir = await getApplicationDocumentsDirectory();
+          final redTreeDir = Directory('${appDir.path}/RedTree');
+          
+          if (!await redTreeDir.exists()) {
+            await redTreeDir.create(recursive: true);
+          }
+          
+          await _setDefaultStoragePath(redTreeDir.path);
+          print('✅ RedTree folder created in app directory: ${redTreeDir.path}');
+        }
+      } else {
+        // For iOS, create folder in documents directory
+        final appDir = await getApplicationDocumentsDirectory();
+        final redTreeDir = Directory('${appDir.path}/RedTree');
+        
+        if (!await redTreeDir.exists()) {
+          await redTreeDir.create(recursive: true);
+        }
+        
+        await _setDefaultStoragePath(redTreeDir.path);
+        print('✅ RedTree folder created for iOS: ${redTreeDir.path}');
+      }
+    } catch (e) {
+      print('❌ Error initializing RedTree folder: $e');
+      // Fallback to app documents directory
+      try {
+        final appDir = await getApplicationDocumentsDirectory();
+        final redTreeDir = Directory('${appDir.path}/RedTree');
+        if (!await redTreeDir.exists()) {
+          await redTreeDir.create(recursive: true);
+        }
+        await _setDefaultStoragePath(appDir.path);
+        print('✅ Fallback: RedTree folder in app directory');
+      } catch (fallbackError) {
+        print('❌ Fallback storage initialization failed: $fallbackError');
+      }
+    }
+  }
+
+  // Request storage permissions for Android
+  static Future<void> _requestStoragePermissions() async {
+    try {
+      if (Platform.isAndroid) {
+        // Request basic storage permissions first
+        final storageStatus = await Permission.storage.status;
+        if (!storageStatus.isGranted) {
+          await Permission.storage.request();
+        }
+
+        // For Android 11+, also request manage external storage if available
+        final manageStorageStatus = await Permission.manageExternalStorage.status;
+        if (!manageStorageStatus.isGranted) {
+          await Permission.manageExternalStorage.request();
+        }
+      }
+    } catch (e) {
+      print('❌ Error requesting storage permissions: $e');
+    }
+  }
+
+  // Try to create RedTree folder in external storage locations
+  static Future<String?> _createRedTreeFolder() async {
+    // List of potential locations to try
+    final potentialPaths = [
+      '/storage/emulated/0/Download',
+      '/storage/emulated/0/Download/RedTree',
+      '/storage/emulated/0/RedTree',
+      '/storage/emulated/0/Documents/RedTree',
+    ];
+
+    for (final path in potentialPaths) {
+      try {
+        final dir = Directory(path);
+        
+        // Try to create the directory
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+        
+        // Test if we can actually write to this directory
+        final testFile = File('${dir.path}/.test');
+        await testFile.writeAsString('test');
+        await testFile.delete();
+        
+        print('✅ Successfully created and tested RedTree folder at: $path');
+        return path;
+      } catch (e) {
+        print('⚠️ Failed to create folder at $path: $e');
+        continue;
+      }
+    }
+    
+    return null;
+  }
+
+  // Set default storage path only if no custom path exists
+  static Future<void> _setDefaultStoragePath(String path) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      
+      // Check if user has already set a custom folder path
+      final existingPath = prefs.getString('folderPath');
+      if (existingPath == null || existingPath.isEmpty) {
+        // Only set default path if no custom path exists
+        await prefs.setString('folderPath', path);
+        folderPathNotifier.value = path;
+        print('✅ Set default folder path: $path');
+      } else {
+        // User has a custom path, don't override it
+        print('✅ Keeping user\'s custom folder path: $existingPath');
+        // Still update the notifier to match the saved path
+        if (folderPathNotifier.value != existingPath) {
+          folderPathNotifier.value = existingPath;
+        }
+      }
+    } catch (e) {
+      print('❌ Error setting default storage path: $e');
+    }
+  }
+
+
+
+  /// Check if the RedTree folder exists and is accessible
+  Future<bool> isRedTreeFolderAccessible() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      String folderPath = prefs.getString('folderPath') ?? "/storage/emulated/0/Download";
+      
+      final directory = Directory(folderPath);
+      if (!await directory.exists()) {
+        return false;
+      }
+      
+      // Test if we can write to the directory
+      final testFile = File('${directory.path}/.test');
+      await testFile.writeAsString('test');
+      await testFile.delete();
+      return true;
+    } catch (e) {
+      print('❌ RedTree folder is not accessible: $e');
+      return false;
+    }
   }
 }
 

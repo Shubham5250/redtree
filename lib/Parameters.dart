@@ -8,6 +8,7 @@ import 'CustomDropdown.dart';
 import 'CustomTitle.dart';
 import 'DirectoryButton.dart';
 import 'globals.dart';
+import 'GoogleDriveService.dart';
 
 class ParametersScreen extends StatefulWidget {
 
@@ -33,6 +34,9 @@ class _ParametersScreenState extends State<ParametersScreen> {
   final ValueNotifier<bool> _folderPathEnabled = ValueNotifier<bool>(false);
   final ValueNotifier<bool> _fileNamingEnabled = ValueNotifier<bool>(false);
   bool _isPrefixLoaded = true;
+  
+  final GoogleDriveService _googleDriveService = GoogleDriveService();
+  bool _isBackingUp = false;
 
 
   bool _isSearching = false; // To toggle search interface
@@ -318,6 +322,11 @@ class _ParametersScreenState extends State<ParametersScreen> {
                             if (selectedFolder != null) {
                               folderPathNotifier.value = selectedFolder;
                               print("Selected folder updated: $selectedFolder");
+                              
+                              // Immediately save the new folder path to SharedPreferences
+                              final prefs = await SharedPreferences.getInstance();
+                              await prefs.setString('folderPath', selectedFolder);
+                              print("Folder path saved to SharedPreferences: $selectedFolder");
                             }
                           }
                               : null,
@@ -613,6 +622,149 @@ class _ParametersScreenState extends State<ParametersScreen> {
     }
   }
 
+  Future<void> _performBackup() async {
+    if (_isBackingUp) return;
+
+    setState(() {
+      _isBackingUp = true;
+    });
+
+    try {
+      // Check if user is signed in
+      if (!await _googleDriveService.isSignedIn()) {
+        // Try to sign in
+        final signedIn = await _googleDriveService.signIn();
+        if (!signedIn) {
+          _showMessage('backupSignInRequired'.tr, isError: true);
+          return;
+        }
+      }
+
+      // Show progress dialog
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('backingUpData'.tr),
+            ],
+          ),
+        ),
+      );
+
+      // Perform backup
+      final success = await _googleDriveService.backupAppData();
+      
+      Navigator.pop(context); // Close progress dialog
+
+      if (success) {
+        _showMessage('backupSuccessful'.tr);
+      } else {
+        _showMessage('backupFailed'.tr, isError: true);
+      }
+    } catch (e) {
+      Navigator.pop(context); // Close progress dialog if open
+      _showMessage('backupError'.tr + ': $e', isError: true);
+    } finally {
+      setState(() {
+        _isBackingUp = false;
+      });
+    }
+  }
+
+  Future<void> _performRestore() async {
+    if (_isBackingUp) return;
+
+    setState(() {
+      _isBackingUp = true;
+    });
+
+    try {
+      // Check if user is signed in
+      if (!await _googleDriveService.isSignedIn()) {
+        // Try to sign in
+        final signedIn = await _googleDriveService.signIn();
+        if (!signedIn) {
+          _showMessage('restoreSignInRequired'.tr, isError: true);
+          return;
+        }
+      }
+
+      // Show confirmation dialog
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+          title: Text('restoreConfirmation'.tr),
+          content: Text('restoreWarning'.tr),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text('cancel'.tr),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text('restore'.tr),
+            ),
+          ],
+        ),
+      );
+
+      if (confirmed != true) return;
+
+      // Show progress dialog
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(height: 16),
+              Text('restoringData'.tr),
+            ],
+          ),
+        ),
+      );
+
+      // Perform restore
+      final success = await _googleDriveService.restoreAppData();
+      
+      Navigator.pop(context); // Close progress dialog
+
+      if (success) {
+        _showMessage('restoreSuccessful'.tr);
+        // Trigger a reload of the file manager
+        mediaReloadNotifier.value++;
+      } else {
+        _showMessage('restoreFailed'.tr, isError: true);
+      }
+    } catch (e) {
+      Navigator.pop(context); // Close progress dialog if open
+      _showMessage('restoreError'.tr + ': $e', isError: true);
+    } finally {
+      setState(() {
+        _isBackingUp = false;
+      });
+    }
+  }
+
+  void _showMessage(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? Colors.red : Colors.green,
+      ),
+    );
+  }
+
   Future<void> _saveLanguageToPrefs(String languageCode) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('languageCode', languageCode);
@@ -649,6 +801,9 @@ class _ParametersScreenState extends State<ParametersScreen> {
     String? savedKey = prefs.getString('fileAspect');
     if (savedKey != null) {
       fileAspectNotifier.value = savedKey;
+    } else {
+      // Set default to 'smallImage' if no saved preference exists
+      fileAspectNotifier.value = 'smallImage';
     }
 
     bool? savedFileAspectEnabled = prefs.getBool('fileAspectEnabled');
@@ -668,7 +823,11 @@ class _ParametersScreenState extends State<ParametersScreen> {
     final prefs = await SharedPreferences.getInstance();
     String? savedFolderPath = prefs.getString('folderPath');
     if (savedFolderPath != null) {
-      folderPathNotifier.value = savedFolderPath;
+      // Only update if the value has actually changed
+      if (folderPathNotifier.value != savedFolderPath) {
+        folderPathNotifier.value = savedFolderPath;
+        print("Parameters: Loaded saved folder path: $savedFolderPath");
+      }
     }
   }
   Future<void> _loadPrefix() async {
@@ -741,16 +900,77 @@ class _ParametersScreenState extends State<ParametersScreen> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: _filteredItems.map((itemKey) {
-          return Column(
-            children: [
-              _itemWidgets[itemKey]!,
-              const Divider(),
-            ],
-          );
-        }).toList(),
+      body: Column(
+        children: [
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: _filteredItems.map((itemKey) {
+                return Column(
+                  children: [
+                    _itemWidgets[itemKey]!,
+                    const Divider(),
+                  ],
+                );
+              }).toList(),
+            ),
+          ),
+          // Backup/Restore buttons at the bottom
+          Container(
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.grey[50],
+              border: Border(top: BorderSide(color: Colors.grey[300]!)),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isBackingUp ? null : _performBackup,
+                    icon: _isBackingUp 
+                        ? SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(Icons.backup),
+                    label: Text('backupToDrive'.tr),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.blue,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.zero,
+                      ),
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isBackingUp ? null : _performRestore,
+                    icon: _isBackingUp 
+                        ? SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(Icons.restore),
+                    label: Text('restoreFromDrive'.tr),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.green,
+                      foregroundColor: Colors.white,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.zero,
+                      ),
+                      padding: EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -796,12 +1016,8 @@ class _ParametersScreenState extends State<ParametersScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('cancel'.tr),
-          ),
-          TextButton(
             onPressed: () => Navigator.pop(context, controller.text),
-            child: Text('save'.tr),
+            child: Text('ok'.tr),
           ),
         ],
       ),

@@ -1,7 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
-import 'package:RedTree/Parameters.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -11,15 +9,19 @@ import 'package:get/get_utils/get_utils.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:video_player/video_player.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
+import 'package:audioplayers/audioplayers.dart';
 import 'ProgressDialog.dart';
 import 'SearchIndex.dart';
 import 'file_utils.dart';
 import 'globals.dart';
+import 'CustomColorPicker.dart';
 import 'package:path/path.dart' as p;
 import 'image_crop.dart';
-import 'main.dart';
 import 'note_utils.dart';
 import 'package:image/image.dart' as img;
+import 'BlinkingMicWidget.dart';
+import 'TextEditorScreen.dart';
 
 class FileManager extends StatefulWidget {
   final bool showCancelBtn;
@@ -86,6 +88,16 @@ class _FileManagerState extends State<FileManager> {
   bool isAwaitingMultiFileMove = false;
 
   final ValueNotifier<bool> isIndexing = ValueNotifier<bool>(true);
+  
+  // Speech-to-text variables
+  final stt.SpeechToText _speech = stt.SpeechToText();
+  bool _isListening = false;
+  
+  // State for empty folder message
+  bool _showEmptyFolderMessage = false;
+  Timer? _emptyFolderTimer;
+  
+
 
   @override
   void initState() {
@@ -116,6 +128,7 @@ class _FileManagerState extends State<FileManager> {
 
 
     _initializeIndexAndSearch();
+    _loadFolderColors();
 
   }
 
@@ -123,6 +136,7 @@ class _FileManagerState extends State<FileManager> {
   void dispose() {
     _searchQuery.removeListener(_handleSearchChange);
     _searchController.dispose();
+    _emptyFolderTimer?.cancel();
     super.dispose();
   }
 
@@ -240,7 +254,20 @@ class _FileManagerState extends State<FileManager> {
     if (!await FileUtils.isFolderAccessible(currentPath)) {
       if (context.mounted) {
         FileUtils.showFolderMovedSnackBar(context, currentPath);
-        folderPathNotifier.value = '';
+        
+        // Don't reset the folder path to empty - this causes issues
+        // Instead, try to restore the default path or keep the current one
+        final prefs = await SharedPreferences.getInstance();
+        final savedPath = prefs.getString('folderPath');
+        
+        if (savedPath != null && savedPath.isNotEmpty && savedPath != currentPath) {
+          // Try to restore the saved path
+          folderPathNotifier.value = savedPath;
+          print('🔄 Restored saved folder path: $savedPath');
+        } else {
+          // Keep the current path but log the issue
+          print('⚠️ Folder path validation failed, keeping current path: $currentPath');
+        }
       }
     }
   }
@@ -617,8 +644,24 @@ class _FileManagerState extends State<FileManager> {
       final entities = dir.listSync();
 
       if (entities.isEmpty) {
-        Fluttertoast.showToast(msg: "folderIsEmpty".tr);
+        setState(() {
+          _showEmptyFolderMessage = true;
+        });
+        // Auto-dismiss after short duration
+        _emptyFolderTimer?.cancel();
+        _emptyFolderTimer = Timer(Duration(seconds: 2), () {
+          if (mounted) {
+            setState(() {
+              _showEmptyFolderMessage = false;
+            });
+          }
+        });
         return []; // prevents expansion and down-arrow
+      } else {
+        setState(() {
+          _showEmptyFolderMessage = false;
+        });
+        _emptyFolderTimer?.cancel();
       }
 
 
@@ -654,7 +697,23 @@ class _FileManagerState extends State<FileManager> {
       }
 
       if (children.isEmpty) {
-        Fluttertoast.showToast(msg: "folderIsEmpty".tr);
+        setState(() {
+          _showEmptyFolderMessage = true;
+        });
+        // Auto-dismiss after short duration
+        _emptyFolderTimer?.cancel();
+        _emptyFolderTimer = Timer(Duration(seconds: 2), () {
+          if (mounted) {
+            setState(() {
+              _showEmptyFolderMessage = false;
+            });
+          }
+        });
+      } else {
+        setState(() {
+          _showEmptyFolderMessage = false;
+        });
+        _emptyFolderTimer?.cancel();
       }
 
     } catch (e) {
@@ -766,23 +825,7 @@ class _FileManagerState extends State<FileManager> {
                 _treeViewController =
                     _treeViewController!.copyWith(selectedKey: node.key);
               });
-
-              FileUtils.showPopupMenu(
-                context,
-                File(node.key),
-                camera,
-                null,
-                onFileChanged: () => _reloadFileParent(node.key),
-                onFilesMoved: () => _initializeTree(folderPathNotifier.value),
-                onEnterMultiSelectMode: () {
-                  setState(() {
-                    _isMultiSelectMode = true;
-                    _selectedFilePaths.add(node.key);
-                    _treeViewController =
-                        _treeViewController!.copyWith(selectedKey: node.key);
-                  });
-                },
-              );
+              // Just select the file, don't show popup menu
             } else {
               _handleNodeTap(node.key);
               setState(() {
@@ -803,7 +846,31 @@ class _FileManagerState extends State<FileManager> {
         });
       },
       onLongPress: () {
-        if (isFolder) _showFolderOptions(node.key, node);
+        if (isFile) {
+          setState(() {
+            _treeViewController =
+                _treeViewController!.copyWith(selectedKey: node.key);
+          });
+
+          FileUtils.showPopupMenu(
+            context,
+            File(node.key),
+            camera,
+            null,
+            onFileChanged: () => _reloadFileParent(node.key),
+            onFilesMoved: () => _initializeTree(folderPathNotifier.value),
+            onEnterMultiSelectMode: () {
+              setState(() {
+                _isMultiSelectMode = true;
+                _selectedFilePaths.add(node.key);
+                _treeViewController =
+                    _treeViewController!.copyWith(selectedKey: node.key);
+              });
+            },
+          );
+        } else if (isFolder) {
+          _showFolderOptions(node.key, node);
+        }
       },
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 6),
@@ -822,9 +889,18 @@ class _FileManagerState extends State<FileManager> {
             else
               const SizedBox(width: 24),
             const SizedBox(width: 4),
-            Icon(
-              isFolder ? Icons.folder : Icons.insert_drive_file,
-              color: isFolder ? Colors.amber : Colors.grey,
+            ValueListenableBuilder<Map<String, Color>>(
+              valueListenable: folderColorsNotifier,
+              builder: (context, folderColors, child) {
+                Color iconColor = Colors.grey;
+                if (isFolder) {
+                  iconColor = folderColors[node.key] ?? Colors.amber;
+                }
+                return Icon(
+                  isFolder ? Icons.folder : Icons.insert_drive_file,
+                  color: iconColor,
+                );
+              },
             ),
             const SizedBox(width: 8),
             Expanded(
@@ -845,6 +921,19 @@ class _FileManagerState extends State<FileManager> {
                             ? IconButton(
                           icon: const Icon(Icons.article, color: Colors.orange),
                           onPressed: () => showNoteDialog(context, node.key),
+                        )
+                            : const SizedBox.shrink();
+                      },
+                    ),
+                  if (isFolder)
+                    ValueListenableBuilder<Map<String, String>>(
+                      valueListenable: folderNotesNotifier,
+                      builder: (context, folderNotes, _) {
+                        final hasNote = folderNotes.containsKey(node.key);
+                        return hasNote
+                            ? IconButton(
+                          icon: const Icon(Icons.article, color: Colors.orange),
+                          onPressed: () => NoteUtils.showFolderNoteDialog(context, node.key, folderNotesNotifier),
                         )
                             : const SizedBox.shrink();
                       },
@@ -905,36 +994,45 @@ class _FileManagerState extends State<FileManager> {
           ),
         );
 
-        // Handle the result when coming back
+        // Handle the result when coming back - completely non-blocking with aggressive optimization
         if (result != null) {
           final hasChanges = result['hasChanges'] as bool? ?? false;
           final renamedFiles = result['renamedFiles'] as Map<String, String>? ?? {};
           final folderContentChanged = result['folderContentChanged'] as bool? ?? false;
           final duplicatedFiles = result['duplicatedFiles'] as List? ?? [];
 
-          if (hasChanges && renamedFiles.isNotEmpty) {
-            for (final entry in renamedFiles.entries) {
-              await handleExternalFileRename(entry.key, entry.value);
-            }
+          // Process changes asynchronously without blocking navigation - with much longer delays
+          if (hasChanges) {
+            // Use much longer delay to ensure navigation is completely finished
+            Future.delayed(Duration(milliseconds: 1500), () async {
+              try {
+                if (renamedFiles.isNotEmpty) {
+                  for (final entry in renamedFiles.entries) {
+                    await handleExternalFileRename(entry.key, entry.value);
+                  }
+                }
+                
+                if (folderContentChanged) {
+                  await _reloadFileParent(file.path);
+                }
+
+                if (duplicatedFiles.isNotEmpty) {
+                  print("🔄 Reloading folder due to duplicated files: $duplicatedFiles");
+                  // Minimal delay for better performance
+                  await Future.delayed(Duration(milliseconds: 100));
+                  await _forceReloadFolderWithDuplicates(file.path, duplicatedFiles);
+                }
+              } catch (e) {
+                print('Error processing changes: $e');
+              }
+            });
           }
-            if ( hasChanges && folderContentChanged) {
-              await _reloadFileParent(file.path);
-            }
-
-          if ( duplicatedFiles.isNotEmpty) {
-            if (duplicatedFiles.isNotEmpty) {
-              print("🔄 Reloading folder due to duplicated files: $duplicatedFiles");
-
-              await Future.delayed(Duration(milliseconds: 100));
-              await _forceReloadFolderWithDuplicates(file.path, duplicatedFiles);
-            } else {
-              await _reloadFileParent(file.path);
-            }
-          }
-
         }
 
-        _loadNotesAsync();
+        // Defer note loading to avoid blocking navigation - using much longer delay for better performance
+        Future.delayed(Duration(milliseconds: 2000), () {
+          _loadNotesAsyncDeferred();
+        });
 
       }
     } else {
@@ -946,6 +1044,7 @@ class _FileManagerState extends State<FileManager> {
       );
     }
   }
+  // This method is kept for backward compatibility but not used in optimized flow
   void _loadNotesAsync() {
     Future(() async {
       try {
@@ -960,6 +1059,46 @@ class _FileManagerState extends State<FileManager> {
       }
     });
   }
+
+  void _loadNotesAsyncDeferred() {
+    // Skip note loading entirely to avoid blocking navigation
+    // Notes will be loaded when actually needed in the UI
+    return;
+  }
+
+  Future<void> _loadFolderColors() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final Map<String, Color> colors = {};
+      
+      // Get all keys that start with 'folder_color_'
+      final keys = prefs.getKeys();
+      for (final key in keys) {
+        if (key.startsWith('folder_color_')) {
+          final folderPath = key.substring('folder_color_'.length);
+          final colorValue = prefs.getInt(key);
+          if (colorValue != null) {
+            colors[folderPath] = Color(colorValue);
+          }
+        }
+      }
+      
+      folderColorsNotifier.value = colors;
+      
+      // Load recent colors
+      final recentColorValues = prefs.getStringList('recent_colors') ?? [];
+      final recentColors = recentColorValues
+          .map((value) => Color(int.parse(value)))
+          .toList();
+      recentColorsNotifier.value = recentColors;
+    } catch (e) {
+      print('Error loading folder colors: $e');
+    }
+  }
+
+
+
+
 
   Future<void> _forceReloadFolderWithDuplicates(String filePath, List<dynamic> duplicatedFiles) async {
     final parentPath = p.dirname(filePath);
@@ -1037,12 +1176,42 @@ class _FileManagerState extends State<FileManager> {
 
 
 
-  bool _isMediaFile(String path) {
-    return path.endsWith(".jpg") ||
-        path.endsWith(".jpeg") ||
-        path.endsWith(".png") ||
-        path.endsWith(".mp4") ||
-        path.endsWith(".mov");
+  static bool _isMediaFile(String path) {
+    final lowerPath = path.toLowerCase();
+    // Check if it's a note file (same name as media file but with .txt extension)
+    if (lowerPath.endsWith(".txt")) {
+      // Get the base path without the .txt extension
+      final basePath = path.substring(0, path.length - 4);
+
+      // Exclude folder notes like "/path/folder.txt"
+      try {
+        if (Directory(basePath).existsSync()) {
+          return false;
+        }
+      } catch (_) {}
+
+      // Exclude media notes saved as baseName + .txt (e.g., "image.jpg" -> "image.txt")
+      // by checking for any sibling media file with common extensions
+      const mediaExtensions = ['.jpg', '.jpeg', '.png', '.mp4', '.mov', '.mp3', '.m4a'];
+      for (final ext in mediaExtensions) {
+        try {
+          if (File(basePath + ext).existsSync() || File(basePath + ext.toUpperCase()).existsSync()) {
+            return false;
+          }
+        } catch (_) {}
+      }
+
+      // Otherwise treat as standalone text file (e.g. memo.txt) and include it
+      return true;
+    }
+    
+    return lowerPath.endsWith(".jpg") ||
+        lowerPath.endsWith(".jpeg") ||
+        lowerPath.endsWith(".png") ||
+        lowerPath.endsWith(".mp4") ||
+        lowerPath.endsWith(".mov") ||
+        lowerPath.endsWith(".mp3") ||
+        lowerPath.endsWith(".m4a");
   }
 
 
@@ -1087,6 +1256,12 @@ class _FileManagerState extends State<FileManager> {
   Future<void> _handleNodeTap(String key, {bool isDoubleTap = false}) async {
     print('🟢 Node tapped: $key');
     selectedFolderPathNotifier.value = key;
+    
+    // Reset empty folder message when navigating to a new folder
+    setState(() {
+      _showEmptyFolderMessage = false;
+    });
+    _emptyFolderTimer?.cancel();
 
     final tappedNode = _findNode(_treeViewController!.children, key);
     if (tappedNode == null) return;
@@ -1360,77 +1535,134 @@ class _FileManagerState extends State<FileManager> {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.white,
+      isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.zero,
       ),
       clipBehavior: Clip.antiAlias,
-      builder: (context) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          ListTile(
-            leading: Icon(Icons.add),
-            title: Text("newFolder".tr),
-            onTap: () async {
-              Navigator.pop(context);
-              final newPath = await _createNewFolder(folderPath);
-              if (newPath != null) {
-                await IndexManager.instance.updateForNewFolder(newPath);
-              }
-            },
-          ),
-
-          ListTile(
-            leading: Icon(Icons.add),
-            title: Text("open".tr),
-            onTap: () async {
-              Navigator.pop(context);
-              _handleNodeDoubleTap(node);             },
-          ),
-          ListTile(
-            leading: Icon(Icons.edit),
-            title: Text("rename".tr),
+      builder: (context) => Container(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.7,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              leading: Icon(Icons.add, size: 20),
+              title: Text("newFolder".tr, style: TextStyle(fontSize: 14)),
               onTap: () async {
                 Navigator.pop(context);
-                final newPath =  await _renameFolder(folderPath);
-                if (newPath != null && newPath != folderPath) {
-                  await IndexManager.instance.updateForFolderRename(folderPath, newPath);
+                final newPath = await _createNewFolder(folderPath);
+                if (newPath != null) {
+                  await IndexManager.instance.updateForNewFolder(newPath);
                 }
-              }
+              },
+            ),
 
-          ),
-          ListTile(
-            leading: Icon(Icons.select_all_sharp),
-            title: Text('select'.tr),
-            onTap: () async {
-              Navigator.pop(context);
-              setState(() {
-                _isMultiSelectMode = true;
-                _selectedFolderPaths.add(folderPath);
-                _treeViewController = _treeViewController!.copyWith(selectedKey: node.key);
-              });
-            },
-          ),
-          ListTile(
-            leading: Icon(Icons.drive_file_move),
-            title: Text("moveFolder".tr),
-            onTap: () async {
-              Navigator.pop(context);
-              moveItem(folderPath);
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              leading: Icon(Icons.add, size: 20),
+              title: Text("open".tr, style: TextStyle(fontSize: 14)),
+              onTap: () async {
+                Navigator.pop(context);
+                _handleNodeDoubleTap(node);             },
+            ),
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              leading: Icon(Icons.edit, size: 20),
+              title: Text("rename".tr, style: TextStyle(fontSize: 14)),
+                onTap: () async {
+                  Navigator.pop(context);
+                  final newPath =  await _renameFolder(folderPath);
+                  if (newPath != null && newPath != folderPath) {
+                    await IndexManager.instance.updateForFolderRename(folderPath, newPath);
+                  }
+                }
 
-            },
+            ),
+                       ListTile(
+               dense: true,
+               contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+               leading: Icon(Icons.article, size: 20),
+               title: Text("annotate".tr, style: TextStyle(fontSize: 14)),
+               onTap: () async {
+                 Navigator.pop(context);
+                 NoteUtils.showNoteInputModal(
+                   context,
+                   folderPath,
+                       (folderPath, noteText) {
+                     NoteUtils.addOrUpdateFolderNote(folderPath, noteText, folderNotesNotifier);
+                     NoteUtils.saveFolderNoteToFile(folderPath, noteText);
+                     
+                     // Force UI rebuild to show note icon immediately
+                     setState(() {});
+                     
+                     Fluttertoast.showToast(
+                       msg: 'noteSaved'.tr,
+                       toastLength: Toast.LENGTH_SHORT,
+                     );
+                   },
+                 );
+               },
+             ),
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              leading: Icon(Icons.palette, size: 20),
+              title: Text('Color', style: TextStyle(fontSize: 14)),
+              onTap: () async {
+                Navigator.pop(context);
+                await _showColorPickerDialog(folderPath);
+              },
+            ),
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              leading: Icon(Icons.select_all_sharp, size: 20),
+              title: Text('select'.tr, style: TextStyle(fontSize: 14)),
+              onTap: () async {
+                Navigator.pop(context);
+                setState(() {
+                  _isMultiSelectMode = true;
+                  _selectedFolderPaths.add(folderPath);
+                  _treeViewController = _treeViewController!.copyWith(selectedKey: node.key);
+                });
+              },
+            ),
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              leading: Icon(Icons.drive_file_move, size: 20),
+              title: Text("moveFolder".tr, style: TextStyle(fontSize: 14)),
+              onTap: () async {
+                Navigator.pop(context);
+                moveItem(folderPath);
+
+              },
+            ),
+            ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              leading: Icon(Icons.delete, size: 20),
+              title: Text("suppress".tr, style: TextStyle(fontSize: 14)),
+              onTap: () async {
+                Navigator.pop(context);
+                final deleted = await _deleteFolder(folderPath);
+                if (deleted) {
+                  await IndexManager.instance.updateForDelete(folderPath);
+                }
+              },
+            ),
+            // Add bottom padding to ensure last item is visible above mobile bottom bars
+            SizedBox(height: MediaQuery.of(context).padding.bottom + 20),
+            ],
           ),
-          ListTile(
-            leading: Icon(Icons.delete),
-            title: Text("suppress".tr),
-            onTap: () async {
-              Navigator.pop(context);
-              final deleted = await _deleteFolder(folderPath);
-              if (deleted) {
-                await IndexManager.instance.updateForDelete(folderPath);
-              }
-            },
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1471,13 +1703,39 @@ class _FileManagerState extends State<FileManager> {
         content: TextField(
           controller: _folderNameController,
           autofocus: true,
-          decoration: InputDecoration(hintText: 'enterFolderName'.tr),
+          decoration: InputDecoration(
+            hintText: 'enterFolderName'.tr,
+            suffixIcon: BlinkingMicSuffixIcon(
+              isListening: _isListening,
+              onPressed: () async {
+                if (!_isListening) {
+                  bool available = await _speech.initialize(
+                    onStatus: (status) => print('Speech status: $status'),
+                    onError: (error) => print('Speech error: $error'),
+                  );
+
+                  if (available) {
+                    setState(() {
+                      _isListening = true;
+                    });
+                    _speech.listen(
+                      onResult: (result) {
+                        final spokenName = result.recognizedWords.replaceAll(' ', '_');
+                        _folderNameController.text = spokenName;
+                      },
+                    );
+                  }
+                } else {
+                  _speech.stop();
+                  setState(() {
+                    _isListening = false;
+                  });
+                }
+              },
+            ),
+          ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text('cancel'.tr),
-          ),
           TextButton(
             onPressed: () {
               final folderName = _folderNameController.text.trim();
@@ -1485,7 +1743,7 @@ class _FileManagerState extends State<FileManager> {
                 Navigator.pop(context, folderName);
               }
             },
-            child: Text('createFolder'.tr),
+            child: Text('ok'.tr),
           ),
         ],
       ),
@@ -1880,10 +2138,6 @@ class _FileManagerState extends State<FileManager> {
         content: Text(message),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text("cancel".tr),
-          ),
-          TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: Text(confirmText),
           ),
@@ -1923,6 +2177,14 @@ class _FileManagerState extends State<FileManager> {
     final newPath = await showDialog<String>(
       context: context,
       builder: (context) {
+        // Select all text when dialog opens
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          controller.selection = TextSelection(
+            baseOffset: 0,
+            extentOffset: controller.text.length,
+          );
+        });
+        
         return AlertDialog(
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.zero,
@@ -1950,13 +2212,43 @@ class _FileManagerState extends State<FileManager> {
 
           content: TextField(
             controller: controller,
-            decoration: InputDecoration(hintText: "newFolderName".tr),
+            decoration: InputDecoration(
+              hintText: "newFolderName".tr,
+              suffixIcon: BlinkingMicSuffixIcon(
+                isListening: _isListening,
+                onPressed: () async {
+                  if (!_isListening) {
+                    bool available = await _speech.initialize(
+                      onStatus: (status) => print('Speech status: $status'),
+                      onError: (error) => print('Speech error: $error'),
+                    );
+
+                    if (available) {
+                      setState(() {
+                        _isListening = true;
+                      });
+                      _speech.listen(
+                        onResult: (result) {
+                          final spokenName = result.recognizedWords.replaceAll(' ', '_');
+                          controller.text = spokenName;
+                        },
+                      );
+                    }
+                  } else {
+                    _speech.stop();
+                    setState(() {
+                      _isListening = false;
+                    });
+                  }
+                },
+              ),
+            ),
+            onTap: () {
+              // Clear selection and place cursor at tapped position
+              // The default behavior will handle cursor placement
+            },
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text('cancel'.tr),
-            ),
             TextButton(
               onPressed: () {
                 Navigator.pop(context);
@@ -1979,7 +2271,7 @@ class _FileManagerState extends State<FileManager> {
                   }
                 }
               },
-              child: Text('rename'.tr),
+              child: Text('ok'.tr),
             ),
           ],
         );
@@ -2111,7 +2403,8 @@ class _FileManagerState extends State<FileManager> {
     print('TreeView children: ${_treeViewController!.children}');
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mediaNotesNotifier.value.isEmpty) {
+      // Load notes immediately for better responsiveness
+      if (mediaNotesNotifier.value.isEmpty || folderNotesNotifier.value.isEmpty) {
         loadNotesFromFolder(folderPathNotifier.value);
       }
     });
@@ -2140,7 +2433,14 @@ class _FileManagerState extends State<FileManager> {
               hintStyle: TextStyle(color: Colors.black54),
             ),
             style: TextStyle(color: Colors.black),
-            onChanged: (value) => _searchQuery.value = value.toLowerCase(),
+            onChanged: (value) {
+              _searchQuery.value = value.toLowerCase();
+              if (value.isNotEmpty) {
+                setState(() {
+                  _showEmptyFolderMessage = false;
+                });
+              }
+            },
           )
               : Text('fileManager'.tr),
 
@@ -2156,6 +2456,7 @@ class _FileManagerState extends State<FileManager> {
                         if (!_isSearching) {
                           _searchController.clear();
                           _searchQuery.value = '';
+                          _showEmptyFolderMessage = false;
                         }
                       });
                     },
@@ -2225,85 +2526,113 @@ class _FileManagerState extends State<FileManager> {
               }
 
 
-              return Column(
+              return Stack(
                 children: [
-                  Expanded(
-                    child: SingleChildScrollView(
-                      controller: _scrollController,
-                      scrollDirection: Axis.vertical,
+                  Column(
+                    children: [
+                      Expanded(
+                        child: SingleChildScrollView(
+                          controller: _scrollController,
+                          scrollDirection: Axis.vertical,
+                          child: TreeView(
+                            key: _treeKey,
+                            physics: const NeverScrollableScrollPhysics(),
+                            shrinkWrap: true,
+                            controller: _treeViewController!.copyWith(
+                              children: nodesToDisplay,
+                            ),
+                            allowParentSelect: true,
+                            theme: TreeViewTheme(
+                              expanderTheme: ExpanderThemeData(
+                                type: ExpanderType.none,
+                                modifier: ExpanderModifier.none,
+                                position: ExpanderPosition.start,
+                                size: 20,
+                                color: Colors.blueGrey.shade400,
+                              ),
+                              labelStyle: TextStyle(fontSize: 16),
+                              parentLabelStyle:
+                              TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                              colorScheme: ColorScheme.light().copyWith(
+                                primary: Colors.blueGrey.shade400,
+                              ),
+                            ),
+                            onNodeTap: (key) {
+                              if (_isMultiSelectMode) return;
 
-                      child: TreeView(
-
-                        key: _treeKey,
-                        physics: const NeverScrollableScrollPhysics(),
-                        shrinkWrap: true,
-
-                        controller: _treeViewController!.copyWith(
-                          children: nodesToDisplay,
-                        ),
-                        allowParentSelect: true,
-                        theme: TreeViewTheme(
-                          expanderTheme: ExpanderThemeData(
-                            type: ExpanderType.none,
-                            modifier: ExpanderModifier.none,
-                            position: ExpanderPosition.start,
-                            size: 20,
-                            color: Colors.blueGrey.shade400,
-                          ),
-                          labelStyle: TextStyle(fontSize: 16),
-                          parentLabelStyle:
-                          TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-                          colorScheme: ColorScheme.light().copyWith(
-                            primary: Colors.blueGrey.shade400,
-                          ),
-                        ),
-
-
-
-
-                        onNodeTap: (key) {
-                          if (_isMultiSelectMode) return;
-
-                          final node = _findNode(_treeViewController!.children, key);
-                          if (node != null) {
-                            if (_isMoveMode) {
-                              print("move mode enabled");
-                              final isFolder = Directory(key).existsSync();
-                              if (isFolder) {
-                                _showDestinationConfirmation(key);
-                              } else {
-                                Fluttertoast.showToast(msg: "Please select a folder".tr);
+                              final node = _findNode(_treeViewController!.children, key);
+                              if (node != null) {
+                                if (_isMoveMode) {
+                                  print("move mode enabled");
+                                  final isFolder = Directory(key).existsSync();
+                                  if (isFolder) {
+                                    _showDestinationConfirmation(key);
+                                  } else {
+                                    Fluttertoast.showToast(msg: "Please select a folder".tr);
+                                  }
+                                } else {
+                                  _handleNodeTap(node.key);
+                                  setState(() {
+                                    selectedFolderPathNotifier.value = node.key;
+                                    _treeViewController = _treeViewController!.copyWith(selectedKey: node.key);
+                                  });
+                                }
                               }
-                            } else {
-                              _handleNodeTap(node.key);
-                              setState(() {
-                                selectedFolderPathNotifier.value = node.key;
-                                _treeViewController = _treeViewController!.copyWith(selectedKey: node.key);
-                              });
-                            }
-                          }
-                        }
-
-
-
-
-                        ,
-                          onNodeDoubleTap: (key) {
-                          final node = _findNode(_treeViewController!.children, key);
-                          if (node != null) _handleNodeDoubleTap(node);
-                        },
-
-                        nodeBuilder: (context, node) =>
-
-
-                            _nodeBuilder(context, node),
-
+                            },
+                            onNodeDoubleTap: (key) {
+                              final node = _findNode(_treeViewController!.children, key);
+                              if (node != null) _handleNodeDoubleTap(node);
+                            },
+                            nodeBuilder: (context, node) =>
+                                _nodeBuilder(context, node),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  // Empty folder message as custom toast at top
+                  if (_showEmptyFolderMessage)
+                    Positioned(
+                      top: 0,
+                      left: 0,
+                      right: 0,
+                      child: Center(
+                        child: Container(
+                          margin: EdgeInsets.only(top: 16),
+                          padding: EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+                          decoration: BoxDecoration(
+                            color: Colors.black87,
+                            borderRadius: BorderRadius.circular(8),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black26,
+                                blurRadius: 8,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.folder_open, color: Colors.white, size: 20),
+                              SizedBox(width: 8),
+                              Text(
+                                "folderIsEmpty".tr,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w500,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       ),
                     ),
-                  ),
                 ],
               );
-            }),)
+            }),
+      ),
     );
   }
 
@@ -2390,7 +2719,8 @@ class _FileManagerState extends State<FileManager> {
 
 
   Future<void> loadNotesFromFolder(String folderPath) async {
-    final Map<String, String> notes = {};
+    final Map<String, String> fileNotes = {};
+    final Map<String, String> folderNotes = {};
 
     void collectNotes(Directory dir) {
       try {
@@ -2401,11 +2731,22 @@ class _FileManagerState extends State<FileManager> {
             try {
               final noteContent = entity.readAsStringSync();
               final imagePath = entity.path.replaceAll(RegExp(r'\.txt$'), '.jpg');
-              notes[imagePath] = noteContent;
+              fileNotes[imagePath] = noteContent;
             } catch (e) {
               debugPrint("[ERROR] Failed to read note: ${entity.path}");
             }
           } else if (entity is Directory) {
+            // Check for folder note
+            final folderNotePath = entity.path + ".txt";
+            final folderNoteFile = File(folderNotePath);
+            if (folderNoteFile.existsSync()) {
+              try {
+                final noteContent = folderNoteFile.readAsStringSync();
+                folderNotes[entity.path] = noteContent;
+              } catch (e) {
+                debugPrint("[ERROR] Failed to read folder note: ${folderNotePath}");
+              }
+            }
             collectNotes(entity);
           }
         }
@@ -2416,8 +2757,16 @@ class _FileManagerState extends State<FileManager> {
 
     collectNotes(Directory(folderPath));
 
-    mediaNotesNotifier.value = notes;
-    debugPrint("[DEBUG] Loaded ${notes.length} notes recursively.");
+    // Update notifiers immediately for instant UI updates
+    mediaNotesNotifier.value = fileNotes;
+    folderNotesNotifier.value = folderNotes;
+    
+    // Trigger UI rebuild if mounted
+    if (mounted) {
+      setState(() {});
+    }
+    
+    debugPrint("[DEBUG] Loaded ${fileNotes.length} file notes and ${folderNotes.length} folder notes recursively.");
   }
 
 
@@ -2544,6 +2893,32 @@ class _FileManagerState extends State<FileManager> {
 
   }
 
+  Future<void> _showColorPickerDialog(String folderPath) async {
+    final prefs = await SharedPreferences.getInstance();
+    final currentColorValue = prefs.getInt('folder_color_$folderPath') ?? Colors.amber.value;
+    final currentColor = Color(currentColorValue);
+
+    await showDialog(
+      context: context,
+      builder: (context) => CustomColorPicker(
+        currentColor: currentColor,
+        title: 'Choose Folder Color',
+        onColorSelected: (Color selectedColor) async {
+          // Save the selected color
+          await prefs.setInt('folder_color_$folderPath', selectedColor.value);
+          
+          // Update the folder colors notifier
+          final currentColors = Map<String, Color>.from(folderColorsNotifier.value);
+          currentColors[folderPath] = selectedColor;
+          folderColorsNotifier.value = currentColors;
+          
+          // Refresh the tree to show the new color
+          setState(() {});
+        },
+      ),
+    );
+  }
+
 }
 
 
@@ -2564,16 +2939,36 @@ class _FolderMediaViewerState extends State<FolderMediaViewer> {
   bool _isMultiSelectMode = false;
   Set<String> _selectedFilePaths = {};
   File? _selectedFile;
+  
+  // Cache for media files to avoid reloading
+  List<File>? _cachedMediaFiles;
+  DateTime? _lastCacheTime;
+  Future<List<File>>? _mediaFilesFuture;
+  
+  @override
+  void initState() {
+    super.initState();
+    // No heavy operations in initState - let FutureBuilder handle async loading
+    // This makes navigation instant, similar to FileManager pattern
+  }
+  
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _searchQuery.dispose();
+    super.dispose();
+  }
   @override
   Widget build(BuildContext context) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mediaNotesNotifier.value.isEmpty) {
-        loadNotesFromFolder(widget.folderPath);
-      }
-    });
-
-    return Scaffold(
-      appBar: AppBar(
+    // Only load notes once during initialization, not on every build
+    // This prevents blocking during navigation back
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, result) {
+        // No additional processing needed - just let it pop immediately
+      },
+      child: Scaffold(
+        appBar: AppBar(
         title: TextField(
           controller: _searchController,
           decoration: InputDecoration(
@@ -2626,24 +3021,29 @@ class _FolderMediaViewerState extends State<FolderMediaViewer> {
 
 
 
-      body: ValueListenableBuilder<int>(
-        valueListenable: mediaReloadNotifier,
-        builder: (context, _, __) {
+      body: FutureBuilder<List<File>>(
+        // Load media files once and cache them - similar to FileManager pattern
+        future: _loadMediaFilesOnce(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          
+          final mediaFiles = snapshot.data ?? [];
+          
           return ValueListenableBuilder<String>(
             valueListenable: _searchQuery,
             builder: (context, query, _) {
-              final mediaFiles = _getMediaFiles(filter: query);
+              final filteredFiles = _filterFiles(mediaFiles, query);
 
               return ValueListenableBuilder<String>(
                 valueListenable: fileAspectNotifier,
                 builder: (context, aspect, _) {
-                  debugPrint('Current file aspect: $aspect');
-
                   return KeyedSubtree(
                     key: ValueKey<String>(aspect),
                     child: aspect == "list"
-                        ? _buildListView(mediaFiles, mediaNotesNotifier.value)
-                        : _buildGridView(mediaFiles, mediaNotesNotifier.value, aspect),
+                        ? _buildListView(filteredFiles, {}) // Don't pass notes to avoid lookup delays
+                        : _buildGridView(filteredFiles, {}, aspect), // Don't pass notes to avoid lookup delays
                   );
                 },
               );
@@ -2651,26 +3051,98 @@ class _FolderMediaViewerState extends State<FolderMediaViewer> {
           );
         },
       ),
-
+      ),
     );
   }
 
-  List<File> _getMediaFiles({String? filter}) {
-    final allFiles = Directory(widget.folderPath)
-        .listSync(recursive: true)
-        .whereType<File>()
-        .where((file) =>
-    file.path.endsWith(".jpg") ||
-        file.path.endsWith(".jpeg") ||
-        file.path.endsWith(".png") ||
-        file.path.endsWith(".mp4"))
-        .toList();
+  // Efficient one-time loading method similar to FileManager pattern
+  Future<List<File>> _loadMediaFilesOnce() {
+    if (_mediaFilesFuture != null) {
+      return _mediaFilesFuture!;
+    }
+    
+    _mediaFilesFuture = _loadMediaFilesAsync();
+    return _mediaFilesFuture!;
+  }
+  
+  // Async loading to avoid blocking the UI
+  Future<List<File>> _loadMediaFilesAsync() async {
+    try {
+      // Use non-recursive scan for speed - same as optimized FileManager
+      final files = Directory(widget.folderPath)
+          .listSync(recursive: false)
+          .whereType<File>()
+          .where((file) => _FileManagerState._isMediaFile(file.path))
+          .toList();
+      
+      _cachedMediaFiles = files;
+      _lastCacheTime = DateTime.now();
+      return files;
+    } catch (e) {
+      print('Error loading media files: $e');
+      return [];
+    }
+  }
+  
+  // Fast filtering method without expensive note lookups
+  List<File> _filterFiles(List<File> files, String query) {
+    if (query.isEmpty) return files;
+    
+    final lowerQuery = query.toLowerCase();
+    return files.where((file) {
+      return p.basename(file.path).toLowerCase().contains(lowerQuery);
+    }).toList();
+  }
 
-    if (filter == null || filter.isEmpty) return allFiles;
+  List<File> _getMediaFiles({String? filter}) {
+    // Use cached files if available and recent (within 10 seconds for better performance)
+    final now = DateTime.now();
+    if (_cachedMediaFiles != null && 
+        _lastCacheTime != null &&
+        now.difference(_lastCacheTime!).inSeconds < 10) {
+      
+      final allFiles = _cachedMediaFiles!;
+      
+      if (filter == null || filter.isEmpty) return allFiles;
+
+      // Optimize filtering to avoid expensive note lookups during navigation
+      final query = filter.toLowerCase();
+      return allFiles.where((file) {
+        final nameMatch = p.basename(file.path).toLowerCase().contains(query);
+        // Skip note matching during initial loads to improve performance
+        if (_lastCacheTime != null && now.difference(_lastCacheTime!).inSeconds < 2) {
+          return nameMatch;
+        }
+        final noteMatch = mediaNotesNotifier.value[file.path]
+            ?.toLowerCase()
+            .contains(query) ??
+            false;
+        return nameMatch || noteMatch;
+      }).toList();
+    }
+    
+    // Load fresh files and cache them (non-recursive for better performance)
+    try {
+      final allFiles = Directory(widget.folderPath)
+          .listSync(recursive: false) // Changed to false for much better performance
+          .whereType<File>()
+          .where((file) => _FileManagerState._isMediaFile(file.path))
+          .toList();
+      
+      // Cache the results
+      _cachedMediaFiles = allFiles;
+      _lastCacheTime = now;
+    } catch (e) {
+      print('Error loading media files: $e');
+      _cachedMediaFiles = [];
+      _lastCacheTime = now;
+    }
+
+    if (filter == null || filter.isEmpty) return _cachedMediaFiles ?? [];
 
     final query = filter.toLowerCase();
 
-    return allFiles.where((file) {
+    return (_cachedMediaFiles ?? []).where((file) {
       final nameMatch = p.basename(file.path).toLowerCase().contains(query);
       final noteMatch = mediaNotesNotifier.value[file.path]
           ?.toLowerCase()
@@ -2693,32 +3165,43 @@ class _FolderMediaViewerState extends State<FolderMediaViewer> {
             : _selectedFile?.path == file.path;
 
         return GestureDetector(
-          onDoubleTap: () => FileUtils.openFullScreen(context, file, mediaFiles),
-
-          onTap: () {
+          onLongPress: () {
             setState(() {
-              if (_isMultiSelectMode) {
+              _selectedFile = file;
+              FileUtils.showPopupMenu(
+                context,
+                file,
+                widget.camera,
+                null,
+                onEnterMultiSelectMode: () {
+                  setState(() {
+                    _isMultiSelectMode = true;
+                    _selectedFilePaths.add(file.path);
+                  });
+                },
+              );
+            });
+          },
+          onTap: () {
+            if (_isMultiSelectMode) {
+              setState(() {
                 if (_selectedFilePaths.contains(file.path)) {
                   _selectedFilePaths.remove(file.path);
                 } else {
                   _selectedFilePaths.add(file.path);
                 }
-              } else {
+              });
+            } else {
+              // Single tap: select only, do not open
+              setState(() {
                 _selectedFile = file;
-                FileUtils.showPopupMenu(
-                  context,
-                  file,
-                  widget.camera,
-                  null,
-                  onEnterMultiSelectMode: () {
-                    setState(() {
-                      _isMultiSelectMode = true;
-                      _selectedFilePaths.add(file.path);
-                    });
-                  },
-                );
-              }
-            });
+              });
+            }
+          },
+          onDoubleTap: () {
+            if (!_isMultiSelectMode) {
+              FileUtils.openFullScreen(context, file, mediaFiles);
+            }
           },
 
           child: Container(
@@ -2732,7 +3215,11 @@ class _FolderMediaViewerState extends State<FolderMediaViewer> {
             child: ListTile(
               leading: file.path.endsWith(".mp4")
                   ? Icon(Icons.videocam)
-                  : Icon(Icons.image),
+                  : file.path.endsWith(".mp3") || file.path.endsWith(".m4a")
+                      ? Icon(Icons.audiotrack)
+                      : file.path.endsWith(".txt")
+                          ? Icon(Icons.description)
+                          : Icon(Icons.image),
               title: Text(file.path.split('/').last),
               trailing: _hasNote(file.path, mediaNotes)
                   ? IconButton(
@@ -2769,35 +3256,44 @@ class _FolderMediaViewerState extends State<FolderMediaViewer> {
             : _selectedFile?.path == file.path;
 
         return GestureDetector(
-
-
-          onTap: () {
+          onLongPress: () {
             setState(() {
-              if (_isMultiSelectMode) {
+              _selectedFile = file;
+              FileUtils.showPopupMenu(
+                context,
+                file,
+                widget.camera,
+                null,
+                onEnterMultiSelectMode: () {
+                  setState(() {
+                    _isMultiSelectMode = true;
+                    _selectedFilePaths.add(file.path);
+                  });
+                },
+              );
+            });
+          },
+          onTap: () {
+            if (_isMultiSelectMode) {
+              setState(() {
                 if (_selectedFilePaths.contains(file.path)) {
                   _selectedFilePaths.remove(file.path);
                 } else {
                   _selectedFilePaths.add(file.path);
                 }
-              } else {
+              });
+            } else {
+              // Single tap: select only, do not open
+              setState(() {
                 _selectedFile = file;
-                FileUtils.showPopupMenu(
-                  context,
-                  file,
-                  widget.camera,
-                  null,
-                  onEnterMultiSelectMode: () {
-                    setState(() {
-                      _isMultiSelectMode = true;
-                      _selectedFilePaths.add(file.path);
-                    });
-                  },
-                );
-              }
-            });
+              });
+            }
           },
-
-          onDoubleTap: () =>FileUtils.openFullScreen(context, file, mediaFiles),
+          onDoubleTap: () {
+            if (!_isMultiSelectMode) {
+              FileUtils.openFullScreen(context, file, mediaFiles);
+            }
+          },
           child: Container(
 
             decoration: BoxDecoration(
@@ -2809,9 +3305,7 @@ class _FolderMediaViewerState extends State<FolderMediaViewer> {
                 Column(
                   children: [
                     Expanded(
-                      child: file.path.endsWith(".mp4")
-                          ? Icon(Icons.videocam, size: 50)
-                          : Image.file(File(file.path)),
+                      child: _buildFileIcon(file),
                     ),
                     SizedBox(height: 4),
                     Text(
@@ -2840,6 +3334,42 @@ class _FolderMediaViewerState extends State<FolderMediaViewer> {
 
   bool _hasNote(String path, Map<String, String> mediaNotes) {
     return mediaNotes.containsKey(path) && mediaNotes[path]!.isNotEmpty;
+  }
+
+  Widget _buildFileIcon(File file) {
+    final filePath = file.path.toLowerCase();
+    
+    // Handle video files
+    if (filePath.endsWith('.mp4') || filePath.endsWith('.mov') || 
+        filePath.endsWith('.webm') || filePath.endsWith('.avi')) {
+      return Icon(Icons.videocam, size: 50, color: Colors.red);
+    }
+    
+    // Handle audio files
+    if (filePath.endsWith('.mp3') || filePath.endsWith('.m4a')) {
+      return Icon(Icons.audiotrack, size: 50, color: Colors.blue);
+    }
+    
+    // Handle text files
+    if (filePath.endsWith('.txt')) {
+      return Icon(Icons.description, size: 50, color: Colors.green);
+    }
+    
+    // Handle image files
+    if (filePath.endsWith('.jpg') || filePath.endsWith('.jpeg') || 
+        filePath.endsWith('.png') || filePath.endsWith('.gif') || 
+        filePath.endsWith('.bmp') || filePath.endsWith('.webp')) {
+      return Image.file(
+        File(file.path),
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return Icon(Icons.broken_image, size: 50, color: Colors.grey);
+        },
+      );
+    }
+    
+    // Default icon for unknown file types
+    return Icon(Icons.insert_drive_file, size: 50, color: Colors.grey);
   }
 
 
@@ -3014,10 +3544,6 @@ class _FolderMediaViewerState extends State<FolderMediaViewer> {
         content: Text(message),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: Text("Cancel"),
-          ),
-          TextButton(
             onPressed: () => Navigator.pop(context, true),
             child: Text(confirmText),
           ),
@@ -3079,6 +3605,11 @@ class _FolderMediaViewerState extends State<FolderMediaViewer> {
 
 
   Future<void> loadNotesFromFolder(String folderPath) async {
+    // Only load notes if they haven't been loaded recently
+    if (mediaNotesNotifier.value.isNotEmpty) {
+      return; // Skip if notes are already loaded
+    }
+    
     final dir = Directory(folderPath);
     final noteFiles = dir
         .listSync()
@@ -3129,6 +3660,18 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
   VideoPlayerController? _videoController;
   bool _isVideoInitializing = false;
   Map<String, double> _rotationAngles = {};
+  
+  // Audio player for .mp3 files
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _isAudioPlaying = false;
+  bool _isAudioPaused = false;
+  Duration _audioDuration = Duration.zero;
+  Duration _audioPosition = Duration.zero;
+  Timer? _audioTickTimer;
+  
+  // Debug information for UI display
+  String _audioDebugInfo = '';
+  String _audioStatus = '';
 
   Map<String, Future<void>?> _saveFutures = {};
   double _normalizeAngle(double angle) {
@@ -3138,16 +3681,19 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
   bool _folderContentChanged = false;
   final Set<String> _duplicatedFiles = {};
 
-  double _scale = 1.0;
-  double _previousScale = 1.0;
   TransformationController _transformationController = TransformationController();
-  double _rotationAngle = 0.0;
   bool _isZoomed = false;
   int _imageReloadKey = 0;
   bool _notesLoaded = false;
 
   bool _isImageLoading = false;
   bool _hasChanges = false;
+  bool _longPressTimeout = false;
+  
+  // Enhanced zoom gesture handling
+  bool _isScaling = false;
+  int _pointerCount = 0;
+  bool _gestureInProgress = false;
 
   late final CameraDescription camera;
   @override
@@ -3156,7 +3702,6 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
     _currentIndex = widget.initialIndex;
     _pageController = PageController(initialPage: widget.initialIndex);
     _initializeCurrentMedia();
-    _rotationAngle = 0.0; // reset rotation when changing media
     _transformationController.value = Matrix4.identity();
     _transformationController.addListener(_updateZoomState);
     availableCameras().then((cameras) {
@@ -3165,6 +3710,10 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
       });
     });
     _initializeViewer();
+    
+    // Initialize audio player with proper context
+    _initializeAudioPlayer();
+    
     // final rootPath = "/storage/emulated/0";
     // NoteUtils.loadAllNotes(rootPath);
 
@@ -3172,10 +3721,97 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
 
 
 
+  Future<void> _initializeAudioPlayer() async {
+    try {
+      // Request audio permissions if needed
+      if (Platform.isAndroid) {
+        final audioPermission = await Permission.audio.request();
+        if (!audioPermission.isGranted) {
+          debugPrint('Audio permission not granted');
+          return;
+        }
+      }
+      
+      // Set up audio context for better compatibility
+      await _audioPlayer.setAudioContext(AudioContext(
+        iOS: AudioContextIOS(
+          category: AVAudioSessionCategory.playback,
+          options: {
+            AVAudioSessionOptions.defaultToSpeaker,
+            AVAudioSessionOptions.allowBluetooth,
+            AVAudioSessionOptions.allowBluetoothA2DP,
+          },
+        ),
+        android: AudioContextAndroid(
+          isSpeakerphoneOn: true,
+          stayAwake: true,
+          contentType: AndroidContentType.music,
+          usageType: AndroidUsageType.media,
+          audioFocus: AndroidAudioFocus.gain,
+        ),
+      ));
+      
+      // Set up event listeners
+      _audioPlayer.onPlayerStateChanged.listen((state) {
+        if (mounted) {
+          setState(() {
+            _isAudioPlaying = state == PlayerState.playing;
+            _audioStatus = state.toString().split('.').last;
+          });
+          if (state == PlayerState.playing) {
+            _audioTickTimer?.cancel();
+            _audioTickTimer = Timer.periodic(const Duration(milliseconds: 200), (_) async {
+              try {
+                final pos = await _audioPlayer.getCurrentPosition();
+                if (pos != null && mounted) {
+                  setState(() { _audioPosition = pos; });
+                }
+              } catch (_) {}
+            });
+          } else {
+            _audioTickTimer?.cancel();
+          }
+        }
+      });
+      
+      _audioPlayer.onPositionChanged.listen((position) {
+        if (mounted) {
+          setState(() {
+            _audioPosition = position;
+          });
+        }
+      });
+      
+      _audioPlayer.onDurationChanged.listen((duration) {
+        if (mounted) {
+          setState(() {
+            _audioDuration = duration;
+          });
+        }
+      });
+      
+      _audioPlayer.onPlayerComplete.listen((_) {
+        if (mounted) {
+          setState(() {
+            _isAudioPlaying = false;
+            _audioPosition = Duration.zero;
+            _audioStatus = 'Completed';
+            _audioDebugInfo = 'Audio playback completed';
+          });
+        }
+      });
+      
+      debugPrint('Audio player initialized successfully');
+    } catch (e) {
+      debugPrint('Error initializing audio player: $e');
+    }
+  }
+
   Future<void> _initializeViewer() async {
+    // Defer note loading to avoid blocking initialization
     if (mediaNotesNotifier.value.isEmpty && !_notesLoaded) {
       _notesLoaded = true;
-      await loadNotesFromFolder(widget.mediaFiles[_currentIndex].path);
+      Future.microtask(() => loadNotesFromFolder(widget.mediaFiles[_currentIndex].path));
     }
 
     _initializeCurrentMedia();
@@ -3183,37 +3819,64 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
 
   @override
   void dispose() {
+    // Immediately clean up listeners to prevent memory leaks
     _transformationController.removeListener(_updateZoomState);
+    
+    // Dispose controllers efficiently
     _pageController.dispose();
     _disposeVideoController();
     _transformationController.dispose();
+    _audioTickTimer?.cancel();
+    _audioPlayer.dispose();
+    
+    // Cancel any pending save operations without waiting
+    for (final future in _saveFutures.values) {
+      future?.ignore();
+    }
+    _saveFutures.clear();
 
     super.dispose();
   }
 
   void _disposeVideoController() {
-    _videoController?.pause();
-    _videoController?.dispose();
-    _videoController = null;
+    if (_videoController != null) {
+      _videoController!.pause();
+      _videoController!.dispose();
+      _videoController = null;
+    }
+  }
+
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, "0");
+    String twoDigitMinutes = twoDigits(duration.inMinutes.remainder(60));
+    String twoDigitSeconds = twoDigits(duration.inSeconds.remainder(60));
+    return "$twoDigitMinutes:$twoDigitSeconds";
   }
 
   void _initializeCurrentMedia() {
-    // final file = widget.mediaFiles[_currentIndex];
-    // if (file.path.endsWith('.mp4')) {
-    //   _isVideoInitializing = true;
-    //   _disposeVideoController();
-    //   _videoController = VideoPlayerController.file(file)
-    //     ..initialize().
     final file = widget.mediaFiles[_currentIndex];
+    
+    // Stop any current audio playback when switching files
+    if (_isAudioPlaying) {
+      _audioPlayer.stop();
+      setState(() {
+        _isAudioPlaying = false;
+        _audioPosition = Duration.zero;
+        _audioDuration = Duration.zero;
+      });
+    }
+    
     if (!file.path.endsWith('.mp4')) {
       _disposeVideoController();
       return;
     }
 
+    // Avoid reinitializing if it's the same video
     if (_videoController?.dataSource == file.path) return;
 
     _isVideoInitializing = true;
     _disposeVideoController();
+    
     _videoController = VideoPlayerController.file(file)
       ..initialize().then((_) {
           if (mounted) {
@@ -3229,14 +3892,56 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
             });
           }
         });
-    }
+  }
   void _updateZoomState() {
     final scale = _transformationController.value.getMaxScaleOnAxis();
-    final isZoomed = scale > 1.01;
+    final isZoomed = scale > 1.05; // Slightly higher threshold for better detection
     if (isZoomed != _isZoomed) {
       setState(() => _isZoomed = isZoomed);
     }
   }
+  
+  // Enhanced gesture handling methods
+  void _onPointerDown(PointerDownEvent event) {
+    _pointerCount++;
+    if (_pointerCount == 2) {
+      setState(() {
+        _isScaling = true;
+        _gestureInProgress = true;
+      });
+    }
+  }
+  
+  void _onPointerUp(PointerUpEvent event) {
+    _pointerCount--;
+    if (_pointerCount < 2) {
+      setState(() {
+        _isScaling = false;
+      });
+    }
+    if (_pointerCount == 0) {
+      setState(() {
+        _gestureInProgress = false;
+      });
+    }
+  }
+  
+  void _onPointerCancel(PointerCancelEvent event) {
+    _pointerCount--;
+    if (_pointerCount < 2) {
+      setState(() {
+        _isScaling = false;
+      });
+    }
+    if (_pointerCount <= 0) {
+      _pointerCount = 0;
+      setState(() {
+        _gestureInProgress = false;
+      });
+    }
+  }
+
+
 
   static List<int> _rotateImageInIsolate(Map<String, dynamic> params) {
     final bytes = params['bytes'] as Uint8List;
@@ -3388,6 +4093,28 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
     final file = widget.mediaFiles[_currentIndex];
 
     switch (value) {
+      case 'edit':
+        if (file.path.toLowerCase().endsWith('.txt')) {
+          try {
+            final content = await file.readAsString();
+            await Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => TextEditorScreen(
+                  textFile: file,
+                  initialContent: content,
+                ),
+              ),
+            );
+            setState(() {
+              _hasChanges = true;
+            });
+          } catch (e) {
+            Fluttertoast.showToast(msg: "failedToReadFile".tr);
+          }
+        }
+        break;
+
       case 'rename':
         final renamed = await FileUtils.showRenameDialog(
           context,
@@ -3624,15 +4351,15 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
   //           icon: Icon(Icons.more_vert),
   //           onSelected: _handleMenuSelection,
   //           itemBuilder: (context) =>  [
-  //             PopupMenuItem(value: 'annotate', height: 36, child: Text('annotate'.tr)),
-  //             PopupMenuItem(value: 'rename', height: 36, child: Text('rename'.tr)),
-  //             PopupMenuItem(value: 'duplicate', height: 36, child: Text('duplicate'.tr)),
-  //             PopupMenuItem(value: 'new', height: 36, child: Text('new'.tr)),
-  //             PopupMenuItem(value: 'move', height: 36, child: Text('moveTo'.tr)),
-  //             PopupMenuItem(value: 'share', height: 36, child: Text('share'.tr)),
-  //             PopupMenuItem(value: 'suppress', height: 36, child: Text('suppress'.tr)),
-  //             PopupMenuItem(value: 'rotate', height: 36, child: Text('rotate'.tr)),
-  //             PopupMenuItem(value: 'crop', height: 36, child: Text('crop'.tr)),
+  //             PopupMenuItem(value: 'annotate', height: 28, child: Text('annotate'.tr)),
+  //             PopupMenuItem(value: 'rename', height: 28, child: Text('rename'.tr)),
+  //             PopupMenuItem(value: 'duplicate', height: 28, child: Text('duplicate'.tr)),
+  //             PopupMenuItem(value: 'new', height: 28, child: Text('new'.tr)),
+  //             PopupMenuItem(value: 'move', height: 28, child: Text('moveTo'.tr)),
+  //             PopupMenuItem(value: 'share', height: 28, child: Text('share'.tr)),
+  //             PopupMenuItem(value: 'suppress', height: 28, child: Text('suppress'.tr)),
+  //             PopupMenuItem(value: 'rotate', height: 28, child: Text('rotate'.tr)),
+  //             PopupMenuItem(value: 'crop', height: 28, child: Text('crop'.tr)),
   //
   //           ],
   //         ),
@@ -3774,16 +4501,26 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
     final currentFile = widget.mediaFiles[_currentIndex];
     final screenSize = MediaQuery.of(context).size;
 
-    return WillPopScope(
-      onWillPop: () async {
-        Navigator.pop(context, {
-          'hasChanges': _hasChanges,
-          'renamedFiles': _renamedFiles,
-          'folderContentChanged': _folderContentChanged,
-          'duplicatedFiles': _duplicatedFiles.toList(),
-
-        });
-        return false;
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          // Ultra-fast return with minimal data to reduce serialization overhead
+          final hasAnyChanges = _hasChanges || _renamedFiles.isNotEmpty || _folderContentChanged || _duplicatedFiles.isNotEmpty;
+          
+          if (hasAnyChanges) {
+            // Only return data if there are actual changes
+            Navigator.pop(context, {
+              'hasChanges': _hasChanges,
+              'renamedFiles': _renamedFiles.isEmpty ? <String, String>{} : _renamedFiles,
+              'folderContentChanged': _folderContentChanged,
+              'duplicatedFiles': _duplicatedFiles.isEmpty ? <String>[] : _duplicatedFiles.toList(),
+            });
+          } else {
+            // Return null for no changes - fastest possible return
+            Navigator.pop(context, null);
+          }
+        }
       },
       child: Scaffold(
         backgroundColor: Colors.black,
@@ -3808,20 +4545,27 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
       
         body: Stack(
           children: [
-            PageView.builder(
-              controller: _pageController,
-              physics: _isZoomed
-                  ? const NeverScrollableScrollPhysics()
-                  : const BouncingScrollPhysics(),
-              itemCount: widget.mediaFiles.length,
-              onPageChanged: (index) {
-                setState(() {
-                  _currentIndex = index;
-                  _initializeCurrentMedia();
-                  _transformationController.value = Matrix4.identity();
-                  _isZoomed = false;
-                });
-              },
+            Listener(
+              onPointerDown: _onPointerDown,
+              onPointerUp: _onPointerUp,
+              onPointerCancel: _onPointerCancel,
+              child: PageView.builder(
+                controller: _pageController,
+                physics: (_isZoomed || _isScaling || _gestureInProgress)
+                    ? const NeverScrollableScrollPhysics()
+                    : const BouncingScrollPhysics(),
+                itemCount: widget.mediaFiles.length,
+                onPageChanged: (index) {
+                  setState(() {
+                    _currentIndex = index;
+                    _initializeCurrentMedia();
+                    _transformationController.value = Matrix4.identity();
+                    _isZoomed = false;
+                    _isScaling = false;
+                    _pointerCount = 0;
+                    _gestureInProgress = false;
+                  });
+                },
               itemBuilder: (context, index) {
                 final file = widget.mediaFiles[index];
       
@@ -3836,35 +4580,377 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
                   );
                 }
       
+                // --- AUDIO FILES ---
+                if (file.path.endsWith('.mp3') || file.path.endsWith('.m4a')) {
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () async {
+                      final selected = await showMenu<String>(
+                        context: context,
+                        position: RelativeRect.fromLTRB(
+                          screenSize.width - 10,
+                          kToolbarHeight + 10,
+                          0,
+                          0,
+                        ),
+                        items: [
+                          PopupMenuItem(value: 'annotate', height: 28, child: Text('annotate'.tr)),
+                          PopupMenuItem(value: 'rename', height: 28, child: Text('rename'.tr)),
+                          PopupMenuItem(value: 'duplicate', height: 28, child: Text('duplicate'.tr)),
+                          PopupMenuItem(value: 'move', height: 28, child: Text('moveTo'.tr)),
+                          PopupMenuItem(value: 'share', height: 28, child: Text('share'.tr)),
+                          PopupMenuItem(value: 'suppress', height: 28, child: Text('suppress'.tr)),
+                        ],
+                      );
+                      if (selected != null) _handleMenuSelection(selected);
+                    },
+                    child: Container(
+                    color: Colors.black,
+                    child: Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.audiotrack,
+                            size: 100,
+                            color: Colors.white,
+                          ),
+                          SizedBox(height: 20),
+                          Text(
+                            file.path.split('/').last,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                            ),
+                            textAlign: TextAlign.center,
+                          ),
+                          SizedBox(height: 20),
+                          // Audio controls
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              IconButton(
+                                onPressed: () async {
+                                  setState(() {
+                                    _audioStatus = 'Button pressed';
+                                    _audioDebugInfo = 'Current state: $_isAudioPlaying, File: ${file.path.split('/').last}';
+                                  });
+                                  
+                                  if (_isAudioPlaying) {
+                                    try {
+                                      setState(() {
+                                        _audioStatus = 'Pausing...';
+                                        _audioDebugInfo = 'Pausing audio playback...';
+                                      });
+                                      await _audioPlayer.pause();
+                                      setState(() {
+                                        _isAudioPlaying = false;
+                                        _isAudioPaused = true;
+                                        _audioStatus = 'Paused';
+                                        _audioDebugInfo = 'Audio paused';
+                                      });
+                                    } catch (e) {
+                                      setState(() {
+                                        _audioStatus = 'Pause Error';
+                                        _audioDebugInfo = 'Error pausing audio: $e';
+                                      });
+                                    }
+                                  } else {
+                                    try {
+                                      setState(() {
+                                        _audioStatus = 'Starting...';
+                                        _audioDebugInfo = 'Starting audio playback...';
+                                      });
+                                      
+                                      // Check if file exists and get file info
+                                      final fileExists = await file.exists();
+                                      if (!fileExists) {
+                                        setState(() {
+                                          _audioStatus = 'File Error';
+                                          _audioDebugInfo = 'Audio file does not exist: ${file.path}';
+                                        });
+                                        return;
+                                      }
+                                      
+                                      // Get file size and info
+                                      final fileSize = await file.length();
+                                      setState(() {
+                                        _audioDebugInfo = 'File exists: ${file.path.split('/').last}, Size: ${(fileSize / 1024).toStringAsFixed(1)}KB';
+                                      });
+                                      
+                                      // Resume if previously paused
+                                      if (_isAudioPaused) {
+                                        await _audioPlayer.resume();
+                                        setState(() {
+                                          _isAudioPlaying = true;
+                                          _isAudioPaused = false;
+                                          _audioStatus = 'Playing';
+                                          _audioDebugInfo = 'Resumed audio';
+                                        });
+                                        return;
+                                      }
+                                      // Stop any current playback first
+                                      await _audioPlayer.stop();
+                                      
+                                      // Start new playback
+                                      setState(() {
+                                        _audioStatus = 'Playing...';
+                                        _audioDebugInfo = 'Playing audio file: ${file.path.split('/').last}';
+                                      });
+                                      
+                                      // Reliable playback path: force MediaPlayer mode, full volume,
+                                      // and play from device file. Fallback once to UrlSource on error.
+                                      try {
+                                        await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+                                        await _audioPlayer.setPlayerMode(PlayerMode.mediaPlayer);
+                                        await _audioPlayer.setVolume(1.0);
+                                        await _audioPlayer.play(DeviceFileSource(file.path));
+                                        setState(() {
+                                          _isAudioPlaying = true;
+                                          _audioStatus = 'Playing';
+                                          _audioDebugInfo = 'Audio playback started (MediaPlayer + DeviceFileSource)';
+                                        });
+                                      } catch (primaryError) {
+                                        try {
+                                          await _audioPlayer.setPlayerMode(PlayerMode.mediaPlayer);
+                                          await _audioPlayer.setVolume(1.0);
+                                          await _audioPlayer.play(UrlSource('file://${file.path}'));
+                                          setState(() {
+                                            _isAudioPlaying = true;
+                                            _audioStatus = 'Playing';
+                                            _audioDebugInfo = 'Audio playback started (MediaPlayer + UrlSource)';
+                                          });
+                                        } catch (fallbackError) {
+                                          setState(() {
+                                            _audioStatus = 'Playback Failed';
+                                            _audioDebugInfo = 'Playback failed: $primaryError | Fallback: $fallbackError';
+                                          });
+                                          return;
+                                        }
+                                      }
+                                      
+                                      // Get duration after a short delay to allow file to load
+                                      Future.delayed(Duration(milliseconds: 500), () async {
+                                        try {
+                                          final duration = await _audioPlayer.getDuration();
+                                          if (duration != null) {
+                                            setState(() {
+                                              _audioDuration = duration;
+                                              _audioDebugInfo = 'Audio duration: ${_formatDuration(_audioDuration)}';
+                                            });
+                                          }
+                                        } catch (e) {
+                                          setState(() {
+                                            _audioDebugInfo = 'Could not get audio duration: $e';
+                                          });
+                                        }
+                                      });
+                                      
+                                      // Event listeners are now set up in _initializeAudioPlayer()
+                                      
+                                    } catch (e) {
+                                      setState(() {
+                                        _isAudioPlaying = false;
+                                        _audioStatus = 'Play Error';
+                                        _audioDebugInfo = 'Error playing audio: $e';
+                                      });
+                                    }
+                                  }
+                                },
+                                icon: Icon(
+                                  _isAudioPlaying ? Icons.pause : Icons.play_arrow,
+                                  color: Colors.white,
+                                  size: 50,
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 10),
+                          // Slider for seeking
+                          if (_audioDuration.inMilliseconds > 0) ...[
+                            SizedBox(
+                              width: 280,
+                              child: Slider(
+                                activeColor: Colors.white,
+                                inactiveColor: Colors.white30,
+                                value: _audioPosition.inMilliseconds.clamp(0, _audioDuration.inMilliseconds).toDouble(),
+                                min: 0,
+                                max: _audioDuration.inMilliseconds.toDouble(),
+                                onChanged: (v) {
+                                  setState(() {
+                                    _audioPosition = Duration(milliseconds: v.round());
+                                  });
+                                },
+                                onChangeEnd: (v) async {
+                                  try {
+                                    await _audioPlayer.seek(Duration(milliseconds: v.round()));
+                                  } catch (_) {}
+                                },
+                              ),
+                            ),
+                            Text(
+                              '${_formatDuration(_audioPosition)} / ${_formatDuration(_audioDuration)}',
+                              style: TextStyle(
+                                color: Colors.white70,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                          
+                          // Debug info removed
+                        ],
+                      ),
+                    ),
+                    ),
+                  );
+                }
+      
+                // --- TEXT FILES ---
+                if (file.path.endsWith('.txt')) {
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () async {
+                      final selected = await showMenu<String>(
+                        context: context,
+                        position: RelativeRect.fromLTRB(
+                          screenSize.width - 10,
+                          kToolbarHeight + 10,
+                          0,
+                          0,
+                        ),
+                        items: [
+                          PopupMenuItem(value: 'annotate', height: 28, child: Text('annotate'.tr)),
+                          PopupMenuItem(value: 'edit', height: 28, child: Text('edit'.tr)),
+                          PopupMenuItem(value: 'rename', height: 28, child: Text('rename'.tr)),
+                          PopupMenuItem(value: 'duplicate', height: 28, child: Text('duplicate'.tr)),
+                          PopupMenuItem(value: 'move', height: 28, child: Text('moveTo'.tr)),
+                          PopupMenuItem(value: 'share', height: 28, child: Text('share'.tr)),
+                          PopupMenuItem(value: 'suppress', height: 28, child: Text('suppress'.tr)),
+                        ],
+                      );
+                      if (selected != null) _handleMenuSelection(selected);
+                    },
+                    child: Container(
+                    color: Colors.black,
+                    child: FutureBuilder<String>(
+                      future: file.readAsString(),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return Center(
+                            child: CircularProgressIndicator(color: Colors.white),
+                          );
+                        }
+                        
+                        if (snapshot.hasError) {
+                          return Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.error,
+                                  size: 100,
+                                  color: Colors.red,
+                                ),
+                                SizedBox(height: 20),
+                                Text(
+                                  'Error reading file',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 18,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+                        
+                        final content = snapshot.data ?? '';
+                        return Column(
+                          children: [
+                            // Content
+                            Expanded(
+                              child: SingleChildScrollView(
+                                padding: EdgeInsets.all(16),
+                                child: Text(
+                                  content,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 16,
+                                    height: 1.5,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                    ),
+                  );
+                }
+      
                 // --- IMAGES ---
                 return LayoutBuilder(
                   builder: (context, constraints) {
                     return GestureDetector(
-                      onLongPress: () async {
-                        // your popup menu logic...
-                        final selected = await showMenu<String>(
-                          context: context,
-                          position: RelativeRect.fromLTRB(
-                            screenSize.width - 10,
-                            kToolbarHeight + 10,
-                            0,
-                            0,
-                          ),
-                          items: [
-                            PopupMenuItem(value: 'annotate', height: 36, child: Text('annotate'.tr)),
-                            PopupMenuItem(value: 'rename', height: 36, child: Text('rename'.tr)),
-                            PopupMenuItem(value: 'duplicate', height: 36, child: Text('duplicate'.tr)),
-                            // PopupMenuItem(value: 'new', height: 36, child: Text('new'.tr)),
-                            PopupMenuItem(value: 'move', height: 36, child: Text('moveTo'.tr)),
-                            PopupMenuItem(value: 'share', height: 36, child: Text('share'.tr)),
-                            PopupMenuItem(value: 'suppress', height: 36, child: Text('suppress'.tr)),
-                            PopupMenuItem(value: 'rotate', height: 36, child: Text('rotate'.tr)),
-                            PopupMenuItem(value: 'crop', height: 36, child: Text('crop'.tr)),
-                          ],
-                        );
-                        if (selected != null) _handleMenuSelection(selected);
+                      onTapDown: (details) {
+                        // Reset timeout flag and start timer
+                        _longPressTimeout = false;
+                        // Start a timer to check if tap exceeds 1750ms
+                        Future.delayed(Duration(milliseconds: 1750), () {
+                          // If we reach here, the tap has exceeded 1750ms
+                          _longPressTimeout = true;
+                        });
                       },
-                      onDoubleTapDown: (details) { final tapPosition = details.localPosition; final scale = _transformationController.value.getMaxScaleOnAxis(); if (scale > 1.0) { _transformationController.value = Matrix4.identity(); _isZoomed = false; } else { const zoom = 2.5; final x = -tapPosition.dx * (zoom - 1); final y = -tapPosition.dy * (zoom - 1); _transformationController.value = Matrix4.identity() ..translate(x, y) ..scale(zoom); _isZoomed = true; } setState(() {}); },
+                      onTapUp: (details) async {
+                        // Check if the tap is still within the 1750ms limit
+                        if (!_longPressTimeout) {
+                          final selected = await showMenu<String>(
+                            context: context,
+                            position: RelativeRect.fromLTRB(
+                              screenSize.width - 10,
+                              kToolbarHeight + 10,
+                              0,
+                              0,
+                            ),
+                            items: [
+                              PopupMenuItem(value: 'annotate', height: 28, child: Text('annotate'.tr)),
+                              PopupMenuItem(value: 'rename', height: 28, child: Text('rename'.tr)),
+                              PopupMenuItem(value: 'duplicate', height: 28, child: Text('duplicate'.tr)),
+                              // PopupMenuItem(value: 'new', height: 28, child: Text('new'.tr)),
+                              PopupMenuItem(value: 'move', height: 28, child: Text('moveTo'.tr)),
+                              PopupMenuItem(value: 'share', height: 28, child: Text('share'.tr)),
+                              PopupMenuItem(value: 'suppress', height: 28, child: Text('suppress'.tr)),
+                              PopupMenuItem(value: 'rotate', height: 28, child: Text('rotate'.tr)),
+                              PopupMenuItem(value: 'crop', height: 28, child: Text('crop'.tr)),
+                            ],
+                          );
+                          if (selected != null) _handleMenuSelection(selected);
+                        }
+                      },
+                      onDoubleTapDown: (details) {
+                        final tapPosition = details.localPosition;
+                        final scale = _transformationController.value.getMaxScaleOnAxis();
+                        
+                        if (scale > 1.0) {
+                          // Reset zoom
+                          _transformationController.value = Matrix4.identity();
+                          setState(() {
+                            _isZoomed = false;
+                          });
+                        } else {
+                          // Zoom in at tap position
+                          const zoom = 2.5;
+                          final x = -tapPosition.dx * (zoom - 1);
+                          final y = -tapPosition.dy * (zoom - 1);
+                          _transformationController.value = Matrix4.identity()
+                            ..translate(x, y)
+                            ..scale(zoom);
+                          setState(() {
+                            _isZoomed = true;
+                          });
+                        }
+                      },
                       // onScaleStart: (_) => _previousScale = _scale,
                       // onScaleUpdate: (details) {
                       //   _scale = _previousScale * details.scale;
@@ -3925,6 +5011,46 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
                 );
               },
             ),
+            ),
+      
+            // Zoom indicator
+            if (_isZoomed)
+              Positioned(
+                top: kToolbarHeight + 20,
+                right: 20,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.zoom_in, color: Colors.white, size: 16),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${(_transformationController.value.getMaxScaleOnAxis()).toStringAsFixed(1)}x',
+                        style: const TextStyle(color: Colors.white, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+      
+
+              
+            // Current image index
+            Positioned(
+              bottom: MediaQuery.of(context).padding.bottom + 16,
+              left: 0,
+              right: 0,
+              child: Text(
+                "${_currentIndex + 1}/${widget.mediaFiles.length}",
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w500),
+              ),
+            ),
       
             // bottom index text
             // Positioned(
@@ -3974,8 +5100,13 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
     debugPrint("[DEBUG] Loaded ${notes.length} notes recursively.");
   }
   Future<void> _refreshImage(String filePath) async {
-    final provider = FileImage(File(filePath));
-    await provider.evict();
+    try {
+      final provider = FileImage(File(filePath));
+      await provider.evict();
+    } catch (e) {
+      // Ignore errors during image refresh to avoid blocking navigation
+      print('Error refreshing image: $e');
+    }
   }
 
 
@@ -3987,29 +5118,78 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
     return Stack(
       children: [
         Center(
-          child: InteractiveViewer(
-            transformationController: _transformationController,
-            minScale: 1.0,
-            maxScale: 4.0,
-            child: RotatedBox(
-              quarterTurns: quarterTurns,
-              child: Image.file(
-                file,
-                key: ValueKey(_imageReloadKey),
-                fit: BoxFit.contain,
-                frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                  if (wasSynchronouslyLoaded || frame != null) {
-                    if (_isImageLoading) {
-                      setState(() => _isImageLoading = false);
+          child: GestureDetector(
+            onScaleStart: (details) {
+              setState(() {
+                _isScaling = true;
+                _gestureInProgress = true;
+              });
+            },
+            onScaleUpdate: (details) {
+              // This will be handled by InteractiveViewer
+              // but we ensure the scaling state is maintained
+              if (details.scale != 1.0 && !_isScaling) {
+                setState(() {
+                  _isScaling = true;
+                  _gestureInProgress = true;
+                });
+              }
+            },
+            onScaleEnd: (details) {
+              setState(() {
+                _isScaling = false;
+                _gestureInProgress = false;
+              });
+            },
+            child: InteractiveViewer(
+              transformationController: _transformationController,
+              panEnabled: true,
+              scaleEnabled: true,
+              minScale: 0.5,
+              maxScale: 5.0,
+              constrained: true,
+              onInteractionStart: (details) {
+                if (details.pointerCount >= 2) {
+                  setState(() {
+                    _isScaling = true;
+                    _gestureInProgress = true;
+                  });
+                }
+              },
+              onInteractionUpdate: (details) {
+                final scale = _transformationController.value.getMaxScaleOnAxis();
+                if (scale > 1.05 && !_isZoomed) {
+                  setState(() => _isZoomed = true);
+                } else if (scale <= 1.05 && _isZoomed) {
+                  setState(() => _isZoomed = false);
+                }
+              },
+              onInteractionEnd: (details) {
+                setState(() {
+                  _isScaling = false;
+                  _gestureInProgress = false;
+                });
+              },
+              child: RotatedBox(
+                quarterTurns: quarterTurns,
+                child: Image.file(
+                  file,
+                  key: ValueKey(_imageReloadKey),
+                  fit: BoxFit.contain,
+                  frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                    if (wasSynchronouslyLoaded || frame != null) {
+                      if (_isImageLoading) {
+                        setState(() => _isImageLoading = false);
+                      }
+                      return child;
+                    } else {
+                      if (!_isImageLoading) {
+                        setState(() => _isImageLoading = true);
+                      }
+                      return const SizedBox.shrink();
                     }
-                    return child;
-                  } else {
-                    if (!_isImageLoading) {
-                      setState(() => _isImageLoading = true);
-                    }
-                    return const SizedBox.shrink();
-                  }
-                },
+                  },
+                ),
               ),
             ),
           ),
@@ -4060,7 +5240,10 @@ class _FullScreenMediaViewerState extends State<FullScreenMediaViewer> {
         'isPng': isPng,
       });
       await file.writeAsBytes(encoded);
-      await _refreshImage(file.path);
+      
+      // Defer image refresh to avoid blocking
+      Future.microtask(() => _refreshImage(file.path));
+      
       // Fluttertoast.showToast(msg: "Rotation saved!");
     } catch (e) {
       Fluttertoast.showToast(msg: "Rotation failed: $e");

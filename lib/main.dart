@@ -18,6 +18,8 @@ import 'dart:async';
 import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'file_utils.dart';
+import 'BlinkingMicWidget.dart';
 
 
 void main() async {
@@ -26,19 +28,16 @@ void main() async {
   final cameras = await availableCameras();
   final firstCamera = cameras.first;
 
-  final dateFormatNotifier = ValueNotifier<String>('yyyy/mm/dd');
-  final timeFormatNotifier = ValueNotifier<String>('24h');
-
-
   await _initLanguage();
+  
+  // Ensure RedTree folder exists on app startup
+  // await FileUtils.ensureRedTreeFolderExists();
+  
   runApp(OverlaySupport.global(
     child: MyApp(
       camera: firstCamera,
-      dateFormatNotifier: dateFormatNotifier,
-      timeFormatNotifier: timeFormatNotifier,
     ),
   ));
-  // createRedTreeFolder();
 }
 
 Future<void> _initLanguage() async {
@@ -52,14 +51,10 @@ Future<void> _initLanguage() async {
 
 class MyApp extends StatelessWidget {
   final CameraDescription camera;
-  final ValueNotifier<String> dateFormatNotifier;
-  final ValueNotifier<String> timeFormatNotifier;
 
   const MyApp({
     Key? key,
     required this.camera,
-    required this.dateFormatNotifier,
-    required this.timeFormatNotifier,
   }) : super(key: key);
 
   @override
@@ -136,11 +131,100 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     super.initState();
 
     WidgetsBinding.instance.addObserver(this);
-    _initCamera();
+    
+    // Initialize camera with timeout
+    _initCameraWithTimeout();
 
     _speech = stt.SpeechToText();
 
     _loadRedTreeStates();
+    _ensureRedTreeFolder();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Ensure loading state is shown immediately
+    if (mounted) {
+      setState(() {});
+    }
+    // Ensure camera is ready when screen becomes visible
+    _ensureCameraReady();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    print("App lifecycle state changed: $state");
+    _isAppInForeground = state == AppLifecycleState.resumed;
+
+    if (_controller == null || !_controller!.value.isInitialized) {
+      print("Controller not ready, skipping lifecycle handling");
+      return;
+    }
+
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      print("Pausing camera due to app lifecycle change");
+      _pauseCamera();
+      _needsFullRestart = true;
+    } else if (state == AppLifecycleState.resumed) {
+      print("Resuming camera due to app lifecycle change");
+      if (_needsFullRestart) {
+        print("Full restart needed, restarting camera");
+        restartCamera();
+      } else {
+        print("Resuming camera normally");
+        _resumeCamera();
+      }
+    }
+  }
+
+  // Add a method to handle when the screen is focused again
+  void _onScreenFocused() {
+    print("Screen focused, ensuring camera is ready");
+    Future.microtask(() async {
+      await _ensureCameraReady();
+    });
+  }
+
+  // Removed duplicate didChangeAppLifecycleState method
+
+  Future<void> _initCameraWithTimeout() async {
+    try {
+      // Add timeout to prevent infinite loading
+      await _initCamera().timeout(
+        Duration(seconds: 10),
+        onTimeout: () {
+          print("Camera initialization timed out");
+          if (mounted) {
+            setState(() {});
+          }
+          throw TimeoutException('Camera initialization timed out');
+        },
+      );
+    } catch (e) {
+      print("Camera initialization failed with timeout: $e");
+      if (mounted) {
+        setState(() {});
+      }
+    }
+  }
+
+  Future<void> _ensureCameraReady() async {
+    // Check if camera is ready when screen becomes visible
+    if (_controller == null || !_controller!.value.isInitialized || _isCameraPaused) {
+      print("Camera not ready, reinitializing...");
+      // Ensure loading state is shown immediately
+      if (mounted) setState(() {});
+      await _initCamera();
+    } else {
+      print("Camera is ready and initialized");
+      // Ensure the future is set to completed state for UI
+      if (_initializeControllerFuture == null) {
+        _initializeControllerFuture = Future.value();
+        if (mounted) setState(() {});
+      }
+    }
   }
 
   @override
@@ -153,24 +237,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
 
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    _isAppInForeground = state == AppLifecycleState.resumed;
-
-    if (_controller == null || !_controller!.value.isInitialized) return;
-
-    if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused) {
-      _pauseCamera();
-      _needsFullRestart = true;
-    } else if (state == AppLifecycleState.resumed) {
-      if (_needsFullRestart) {
-        restartCamera();
-      } else {
-        _resumeCamera();
-      }
-    }
-  }
+  // Removed duplicate didChangeAppLifecycleState method
 
 
   Future<void> _initCamera() async {
@@ -180,19 +247,48 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
     }
 
     try {
-      if (_controller != null) {
-        await _controller!.dispose();
+      // Don't dispose controller if it's already initialized and working
+      if (_controller != null && _controller!.value.isInitialized && !_isCameraPaused) {
+        print("Camera already initialized and ready, skipping re-initialization");
+        // Ensure the future is set to completed state
+        if (_initializeControllerFuture == null) {
+          _initializeControllerFuture = Future.value();
+        }
+        return;
       }
 
+      // Dispose old controller if it exists and needs replacement
+      if (_controller != null) {
+        print("Disposing old camera controller");
+        await _controller!.dispose();
+        _controller = null;
+      }
+
+      print("Initializing camera...");
       _controller = CameraController(
         widget.camera,
         ResolutionPreset.ultraHigh,
         enableAudio: true,
       );
 
+      // Reset the future and initialize - ensure loading state is shown
       _initializeControllerFuture = _controller!.initialize().then((_) {
-        if (mounted) setState(() {});
+        print("Camera initialized successfully");
+        _isCameraPaused = false; // Reset paused state
+        if (mounted) {
+          setState(() {});
+        }
+      }).catchError((error) {
+        print("Camera initialization failed: $error");
+        if (mounted) {
+          setState(() {});
+        }
       });
+      
+      // Ensure UI updates immediately to show loading state
+      if (mounted) {
+        setState(() {});
+      }
     } catch (e) {
       print("Camera initialization error: $e");
       if (e is CameraException && e.code == 'CameraAccess') {
@@ -215,14 +311,19 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
   Future<void> _resumeCamera() async {
     if (!_isCameraPaused || _controller == null) return;
     try {
+      print("Resuming camera preview...");
       await _controller!.resumePreview();
       _isCameraPaused = false;
       if (mounted) setState(() {});
+      print("Camera resumed successfully");
     } catch (e) {
       print("Error resuming camera: $e");
+      // If resume fails, try to reinitialize
       await _initCamera();
     }
   }
+
+  // Removed duplicate restartCamera method - using the one below
 
 
 
@@ -237,9 +338,17 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       isRedTreeActivatedNotifier.value = isRedTreeActivated;
       rtBoxDelayNotifier.value = savedDelay;
       fileNamingPrefixNotifier.value   = savedPrefix;
-      folderPathNotifier.value = savedPath;
-
+      
+      // Only update folderPathNotifier if the value has actually changed
+      if (folderPathNotifier.value != savedPath) {
+        folderPathNotifier.value = savedPath;
+        print("MainScreen: Updated folderPathNotifier to: $savedPath");
+      }
     });
+  }
+
+  Future<void> _ensureRedTreeFolder() async {
+    // await FileUtils.ensureRedTreeFolderExists();
   }
 
 
@@ -249,28 +358,63 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       resizeToAvoidBottomInset: false,
 
       body: FutureBuilder<void>(
-
         future: _initializeControllerFuture,
         builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.done &&
-              _controller != null &&
-              _controller!.value.isInitialized &&
-              !_isCameraPaused &&
-              _isAppInForeground &&
-              _controller!.value.previewSize != null) {
+          // Show loading indicator while camera is initializing or not ready
+          if (snapshot.connectionState == ConnectionState.waiting ||
+              _controller == null ||
+              !_controller!.value.isInitialized ||
+              _isCameraPaused ||
+              !_isAppInForeground ||
+              _controller?.value.previewSize == null) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('Preparing camera...'),
+                ],
+              ),
+            );
+          }
+          
+          // Show error if camera initialization failed
+          if (snapshot.hasError) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.error, size: 64, color: Colors.red),
+                  SizedBox(height: 16),
+                  Text('Camera initialization failed'),
+                  SizedBox(height: 8),
+                  Text('${snapshot.error}'),
+                  SizedBox(height: 16),
+                  ElevatedButton(
+                    onPressed: () {
+                      _initCamera();
+                    },
+                    child: Text('Retry'),
+                  ),
+                ],
+              ),
+            );
+          }
+          
+          // Camera is ready - show the camera interface
+          final size = _controller!.value.previewSize!;
+          // final cameraAspectRatio = size.height / size.width;
 
-            final size = _controller!.value.previewSize!;
-            // final cameraAspectRatio = size.height / size.width;
+          final orientation = MediaQuery.of(context).orientation;
+          // final size = _controller!.value.previewSize!;
 
-            final orientation = MediaQuery.of(context).orientation;
-            // final size = _controller!.value.previewSize!;
+          final cameraAspectRatio = (orientation == Orientation.portrait)
+              ? size.height / size.width
+              : size.width / size.height;
 
-            final cameraAspectRatio = (orientation == Orientation.portrait)
-                ? size.height / size.width
-                : size.width / size.height;
-
-            return Stack(
-              children: [
+          return Stack(
+            children: [
 
 
                 if (!_isRestarting &&
@@ -507,18 +651,21 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
                               final imageFile = File(image!.path);
 
+                              // Show image preview immediately
                               setState(() {
                                 _capturedImagePath = image.path;
                                 _isImageFrozen = true;
-
                               });
 
-
                               if (isRedTreeActivatedNotifier.value) {
-                                await Future.delayed(
+                                // Show settings popup after delay, but keep preview visible
+                                Future.delayed(
                                   Duration(milliseconds: (rtBoxDelayNotifier.value * 1000).toInt()),
-                                );
-                                _showImageSettingsPopup(context, image.path, extension: 'jpg');
+                                ).then((_) {
+                                  if (mounted) {
+                                    _showImageSettingsPopup(context, image.path, extension: 'jpg');
+                                  }
+                                });
                               } else {
                                 final now = DateTime.now();
                                 final fileName = '${generateFileNamePrefix(now)}.jpg';
@@ -567,9 +714,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                 ),
               ],
             );
-          } else {
-            return Center(child: CircularProgressIndicator());
-          }
+        
         },
       ),
     );
@@ -673,6 +818,14 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
       context: context,
       barrierDismissible: false,
       builder: (context) {
+        // Select all text when dialog opens
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          fileNameController.selection = TextSelection(
+            baseOffset: 0,
+            extentOffset: fileNameController.text.length,
+          );
+        });
+        
         return StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
@@ -693,11 +846,12 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                         Expanded(
                           child: TextField(
                             controller: fileNameController,
+                            autofocus: true,
                             decoration: InputDecoration(
                               hintText: 'Enter file name',
                               border: InputBorder.none, // No extra space
-                              suffixIcon: IconButton(
-                                icon: Icon(Icons.mic),
+                              suffixIcon: BlinkingMicSuffixIcon(
+                                isListening: _isListening,
                                 onPressed: () async {
                                   if (!_isListening) {
                                     bool available = await _speech.initialize(
@@ -706,7 +860,9 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                     );
 
                                     if (available) {
-                                      _isListening = true;
+                                      setState(() {
+                                        _isListening = true;
+                                      });
                                       _speech.listen(
                                         onResult: (result) {
                                           final spokenName = result.recognizedWords.replaceAll(' ', '_');
@@ -719,14 +875,16 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                                     }
                                   } else {
                                     _speech.stop();
-                                    _isListening = false;
+                                    setState(() {
+                                      _isListening = false;
+                                    });
                                   }
                                 },
-
                               ),
                             ),
                             onTap: () {
-
+                              // Clear selection and place cursor at tapped position
+                              // The default behavior will handle cursor placement
                             },
                             onChanged: (value) {
                               fileName = value;
@@ -743,7 +901,15 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                           valueListenable: _temporarySelectedFolderPath,
                           builder: (context, tempPath, _) {
                             final displayPath = tempPath ?? folderPathNotifier.value;
-                            return Text(displayPath, style: TextStyle(color: Colors.black));
+                            return Container(
+                              width: double.infinity,
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                displayPath, 
+                                style: TextStyle(color: Colors.black),
+                                textAlign: TextAlign.start,
+                              ),
+                            );
                           },
                         ),
                       ],
@@ -785,10 +951,6 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                             ),
                             backgroundColor: Colors.white,
                             actions: [
-                              TextButton(
-                                onPressed: () => Navigator.pop(context),
-                                child: Text("Cancel"),
-                              ),
                               TextButton(
                                 onPressed: () async {
                                   File(filePath).deleteSync();

@@ -52,6 +52,7 @@ class CustomPopupTextButton extends StatelessWidget {
           items: options.map((option) {
             return PopupMenuItem<String>(
               value: option,
+              height: 28,
               child: Text(option.tr),
             );
           }).toList(),

@@ -490,9 +490,15 @@ class IndexManager {
     print("✅ Indexing complete. ${_allIndexedEntries.length} entries "
         "($folderCount folders, $fileCount files) in ${stopwatch.elapsed.inSeconds}s.");
 
+    // Update both file and folder notes notifiers
     mediaNotesNotifier.value = {
       for (final entry in _allIndexedEntries.values)
         if (entry.noteContent != null && !entry.isFolder) entry.path: entry.noteContent!
+    };
+    
+    folderNotesNotifier.value = {
+      for (final entry in _allIndexedEntries.values)
+        if (entry.noteContent != null && entry.isFolder) entry.path: entry.noteContent!
     };
   }
 
@@ -703,9 +709,15 @@ class IndexManager {
         ..clear()
         ..addAll({for (var e in entries) e.path: e});
 
+      // Update both file and folder notes notifiers
       mediaNotesNotifier.value = {
         for (final entry in entries)
           if (entry.noteContent != null && !entry.isFolder) entry.path: entry.noteContent!,
+      };
+      
+      folderNotesNotifier.value = {
+        for (final entry in entries)
+          if (entry.noteContent != null && entry.isFolder) entry.path: entry.noteContent!,
       };
 
       return entries;
